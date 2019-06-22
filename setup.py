@@ -13,5 +13,11 @@ setup(name='livelock',
       packages=['livelock', ],
       platforms=('Any',),
       entry_points={},
+      classifiers=[
+          'Development Status :: 2 - Pre-Alpha',
+          'Intended Audience :: Developers',
+          'Operating System :: OS Independent',
+          'Programming Language :: Python',
+      ],
       include_package_data=True,
       scripts=['livelock.py', ], )
