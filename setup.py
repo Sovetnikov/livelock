@@ -20,4 +20,4 @@ setup(name='livelock',
           'Programming Language :: Python',
       ],
       include_package_data=True,
-      scripts=['livelock.py', ], )
+      scripts=['livelock_server.py', ], )
