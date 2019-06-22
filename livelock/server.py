@@ -175,7 +175,7 @@ class LiveLockProtocol(CommandProtocol):
 
     def connection_lost(self, exc):
         peername = self.transport.get_extra_info('peername')
-        logger.debug(f'Connection lost {peername} {exc}')
+        logger.debug(f'Connection lost {peername} client={self.client_id}, Exception={exc}')
         if self.client_id:
             last_address = self.storage.get_client_last_address(self.client_id)
             if last_address and last_address == peername:
@@ -204,10 +204,10 @@ class LiveLockProtocol(CommandProtocol):
                 self.client_id = args[0]
                 # Restoring client locks
                 self.storage.unrelease_all(self.client_id)
-                # Saving client last connection source addres for making decision to call release_all or not on connection lost
-                self.storage.set_client_last_address(self.client_id, peername)
             else:
                 self.client_id = str(uuid.uuid4())
+            # Saving client last connection source addres for making decision to call release_all or not on connection lost
+            self.storage.set_client_last_address(self.client_id, peername)
             self._reply(self.client_id)
             return
         else:

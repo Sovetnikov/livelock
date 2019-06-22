@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 threadLocal = threading.local()
 
 
-def configure(host=None, port=None):
+def configure_live_lock(host=None, port=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
     if existing_connection:
         existing_connection._close()
