@@ -8,8 +8,20 @@ logger = logging.getLogger(__name__)
 
 threadLocal = threading.local()
 
+def _get_settings(key, default):
+    value = os.getenv(key, None)
+    if not value:
+        try:
+            from django.conf import settings
+            value = getattr(settings, key, None)
+        except ImportError:
+            pass
+    if not value:
+        value = default
+    return value
 
-def configure_live_lock(host=None, port=None):
+
+def configure(host=None, port=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
     if existing_connection:
         existing_connection._close()
@@ -39,11 +51,11 @@ class LiveLockClientTimeoutException(LiveLockClientException):
 class LiveLockConnection(object):
     def __init__(self, host=None, port=None, client_id=None):
         if not host:
-            host = os.getenv("LIVELOCK_HOST", '127.0.0.1')
+            host = _get_settings('LIVELOCK_HOST', '127.0.0.1')
 
         if not port:
             from livelock.shared import DEFAULT_LIVELOCK_SERVER_PORT
-            port = os.getenv("LIVELOCK_PORT", DEFAULT_LIVELOCK_SERVER_PORT)
+            port = _get_settings('LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT)
         try:
             port = int(port)
         except:
