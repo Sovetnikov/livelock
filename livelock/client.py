@@ -127,6 +127,7 @@ class LiveLockConnection(object):
                 data = self._sock.recv(2000)
                 break
             except (ConnectionResetError, OSError) as e:
+                logger.debug('Got exception on send_command: %s' % e)
                 reconnect_attempts -= 1
                 if not reconnect or not reconnect_attempts:
                     raise e
