@@ -1,31 +1,22 @@
+import json
 import logging
 import os
 import socket
 import threading
 import time
 
+from livelock.connection import SocketBuffer
+from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD
+
 logger = logging.getLogger(__name__)
 
 threadLocal = threading.local()
 
-def _get_settings(key, default):
-    value = os.getenv(key, None)
-    if not value:
-        try:
-            from django.conf import settings
-            value = getattr(settings, key, None)
-        except ImportError:
-            pass
-    if not value:
-        value = default
-    return value
-
-
-def configure(host=None, port=None):
+def configure(host=None, port=None, password=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
     if existing_connection:
         existing_connection._close()
-    setattr(threadLocal, 'live_lock_connection', LiveLockConnection(host=host, port=port))
+    setattr(threadLocal, 'live_lock_connection', LiveLockConnection(host=host, port=port, password=password))
 
 
 def _get_connection():
@@ -49,21 +40,22 @@ class LiveLockClientTimeoutException(LiveLockClientException):
 
 
 class LiveLockConnection(object):
-    def __init__(self, host=None, port=None, client_id=None):
-        if not host:
-            host = _get_settings('LIVELOCK_HOST', '127.0.0.1')
+    def __init__(self, host=None, port=None, client_id=None, password=None, max_payload=None):
+        self.host = get_settings(host, 'LIVELOCK_HOST', '127.0.0.1')
 
-        if not port:
-            from livelock.shared import DEFAULT_LIVELOCK_SERVER_PORT
-            port = _get_settings('LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT)
+        from livelock.shared import DEFAULT_LIVELOCK_SERVER_PORT
+        port = get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT)
         try:
             port = int(port)
         except:
             raise Exception('Live lock server port is not integer: ' + str(port))
 
-        self.host = host
         self.port = port
+
+        self._password = get_settings(password, 'LIVELOCK_PASSWORD', None)
+        self._max_payload = get_settings(max_payload, 'LIVELOCK_MAX_PAYLOAD', DEFAULT_MAX_PAYLOAD)
         self._sock = None
+        self._buffer = None
         self._client_id = client_id
         self._reconnect_timeout = 1
         self._reconnect_attempts = 3
@@ -72,6 +64,7 @@ class LiveLockConnection(object):
         if self._sock:
             self._sock.close()
         self._sock = None
+        self._buffer = None
 
     def _connect(self):
         if not self._sock:
@@ -93,6 +86,7 @@ class LiveLockConnection(object):
                     time.sleep(self._reconnect_timeout)
 
             self._sock = sock
+            self._buffer = SocketBuffer(sock, 65536)
             self._send_connect()
 
     def _reconnect(self):
@@ -102,6 +96,9 @@ class LiveLockConnection(object):
         self._connect()
 
     def _send_connect(self):
+        if self._password:
+            resp = self.send_command('PASS ' + self._password, reconnect=False)
+
         if self._client_id:
             resp = self.send_command('CONN ' + self._client_id)
             client_id = resp.strip('+')
@@ -112,8 +109,32 @@ class LiveLockConnection(object):
             client_id = resp.strip('+')
             self._client_id = client_id
 
+    def _read_response(self):
+        response = self._buffer.readline()
+        if not response:
+            raise LiveLockClientException('Empty server response')
+
+        mark = chr(response[0])
+
+        if mark == '-':
+            data = response[1:].decode()
+            code = data.split(' ')[0]
+            msg = data.replace(code, '').strip()
+            code.strip('-')
+            raise LiveLockClientException(msg, code)
+        elif mark == '+':
+            data = response[1:].decode()
+            return data
+        elif mark == '$':
+            data = response[1:].decode()
+            length = int(data)
+            if length <= 0:
+                return None
+            data = self._buffer.read(length)
+            return data
+        raise LiveLockClientException('Unknown server response: ' + str(response[:50]))
+
     def send_command(self, command, reconnect=True):
-        original_command = command
         self._connect()
 
         data = None
@@ -122,11 +143,16 @@ class LiveLockConnection(object):
         while reconnect_attempts:
             try:
                 # if connection lost on AQ command, lock can be acquired by server but we can lost success response from server
-                self._sock.sendall((command + '\n').encode())
+                pay_load = command.encode()
+                pay_load_len = len(pay_load)
+                if pay_load_len > self._max_payload + 1:
+                    raise LiveLockClientException('Max command payload size exceeded {pay_load_len}b with limit of {self._max_payload}b'.format(**locals()))
+                self._sock.sendall(pay_load)
+                self._sock.sendall('\n'.encode())
                 send_success = True
-                data = self._sock.recv(2000)
+                data = self._read_response()
                 break
-            except (ConnectionResetError, OSError) as e:
+            except (ConnectionResetError, OSError, ConnectionError) as e:
                 logger.debug('Got exception on send_command: %s' % e)
                 reconnect_attempts -= 1
                 if not reconnect or not reconnect_attempts:
@@ -140,16 +166,7 @@ class LiveLockConnection(object):
                         logger.debug('Making reentrant lock request')
                 self._reconnect()
 
-        data = data.decode().strip()
-        if data.startswith('-'):
-            code = data.split(' ')[0]
-            msg = data.replace(code, '').strip()
-            code.strip('-')
-            raise LiveLockClientException(msg, code)
-        if not data.startswith('+'):
-            raise LiveLockClientException('Unknown server response ' + data)
-        return data.strip('+')
-
+        return data
 
 class LiveLock(object):
     def __init__(self, id, acquire_timeout=10, live_lock_connection=None):
@@ -162,6 +179,12 @@ class LiveLock(object):
         self.acquire_timeout = acquire_timeout
         self.reentrant = False
 
+    @classmethod
+    def find(cls, pattern):
+        connection = _get_connection()
+        data = connection.send_command('FIND ' + pattern)
+        return json.loads(data)
+
     def acquire(self, blocking=True):
         if blocking is True:
             timeout = self.acquire_timeout
@@ -173,7 +196,7 @@ class LiveLock(object):
                 else:
                     return True
             raise LiveLockClientTimeoutException('Timeout elapsed after %s seconds '
-                                                 'while trying to acquiring '
+                                                 'while trying to acquire '
                                                  'lock.' % self.acquire_timeout)
         else:
             return self._acquire()

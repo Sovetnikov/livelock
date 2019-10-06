@@ -1,4 +1,7 @@
+import json
 import logging
+import os
+import random
 import socket
 import time
 import unittest
@@ -6,9 +9,12 @@ from contextlib import contextmanager
 from multiprocessing import Process
 from threading import Thread
 
-from livelock.client import LiveLockConnection, LiveLock, LiveLockClientTimeoutException, LiveRLock
+from livelock.client import LiveLockConnection, LiveLock, LiveLockClientTimeoutException, LiveRLock, LiveLockClientException, configure
+from livelock.shared import DEFAULT_LIVELOCK_SERVER_PORT
 
 logger = logging.getLogger(__name__)
+
+import logging
 
 
 class TestLiveLock(unittest.TestCase):
@@ -53,16 +59,22 @@ class TestLiveLock(unittest.TestCase):
             time.sleep((self.connection._reconnect_timeout * self.connection._reconnect_attempts) / 2)
             self.network_disabled = not self.network_disabled
 
-    def test_high_level(self):
+    def test_high_level_password(self, password=None):
+        self.test_high_level(password=str(random.randint(10000000, 99999999)))
+
+    def test_high_level(self, password=None):
         logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
 
         release_all_timeout = 5
+        port = self._start_server(release_all_timeout=release_all_timeout, password=password)
+        self.connection2 = LiveLockConnection(port=port, password=password)
 
-        from livelock.server import start
-        self.server = Process(target=start, kwargs=dict(release_all_timeout=release_all_timeout))
-        self.server.start()
+        os.environ['LIVELOCK_PORT'] = str(port)
+        if password:
+            os.environ['LIVELOCK_PASSWORD'] = password
 
-        self.connection2 = LiveLockConnection()
+        # Reset default connection from another test cases
+        configure(port=port, password=password)
 
         # Base check for lock
         with LiveLock(id='1') as lock:
@@ -127,29 +139,68 @@ class TestLiveLock(unittest.TestCase):
 
                 with self.assertRaises(LiveLockClientTimeoutException) as exc:
                     LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection).__enter__()
+                with LiveLock(id='prefix2', live_lock_connection=self.connection2) as lock_prefix:
+                    all_result = LiveLock.find('*')
+                    self.assertEqual(len(all_result), 2)
+                    self.assertTrue('1' in [x[0] for x in all_result])
+                    self.assertTrue('prefix2' in [x[0] for x in all_result])
+                    pattern_result = LiveLock.find('prefix*')
+                    self.assertTrue('prefix2' in [x[0] for x in pattern_result])
 
             self.assertFalse(LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).locked())
 
-
         self.server.terminate()
 
+    def test_low_level_password(self):
+        self.test_low_level(password=str(random.randint(10000000, 99999999)))
 
-    def test_low_level(self):
+    def test_low_level(self, password=None):
         logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
 
         release_all_timeout = 5
+        port = self._start_server(release_all_timeout=release_all_timeout, password=password)
 
-        from livelock.server import start
-        self.server = Process(target=start, kwargs=dict(release_all_timeout=release_all_timeout))
-        self.server.start()
+        self.connection = LiveLockConnection(port=port)
+        self.connection2 = LiveLockConnection(password=password, port=port)
 
-        self.connection = LiveLockConnection()
-        self.connection2 = LiveLockConnection()
+        if password:
+            with self.assertRaises(LiveLockClientException) as exc:
+                self.connection.send_command('CONN')
+            self.assertTrue('password' in str(exc.exception))
+
+            with self.assertRaises(LiveLockClientException) as exc:
+                self.connection.send_command('AQ 1')
+            self.assertTrue('password' in str(exc.exception))
+
+            self.connection = LiveLockConnection(password=password, port=port)
+
+        # Test large command payload warning on cliend side
+        with self.assertRaises(LiveLockClientException) as exc:
+            self.connection.send_command('CONN ' + 'x'*self.connection._max_payload)
+        self.assertFalse(exc.exception.code)
+        self.assertTrue('exceeded' in str(exc.exception))
+
+        # Test large payload on server side
+        # Test large command payload warning on cliend side
+        self.connection._max_payload = self.connection._max_payload*2
+        with self.assertRaises(LiveLockClientException) as exc:
+            self.connection.send_command('CONN ' + 'x'*self.connection._max_payload)
+        self.assertFalse(exc.exception.code)
 
         # Base check for lock
         resp = self.connection.send_command('AQ 1')
         self.assertEqual(resp, '1')
 
+        resp1 = json.loads(self.connection.send_command('FIND *'))
+        self.assertTrue(resp1, list)
+        self.assertEqual(len(resp1), 1)
+
+        resp2 = json.loads(self.connection2.send_command('FIND *'))
+        self.assertTrue(resp2, list)
+        self.assertEqual(len(resp2), 1)
+        self.assertEqual(resp1[0], resp2[0])
+
+        # FIND all clients can find all keys
         resp = self.connection.send_command('LOCKED 1')
         self.assertEqual(resp, '1')
 
@@ -175,9 +226,15 @@ class TestLiveLock(unittest.TestCase):
         # Breaking connection
         self.connection._sock.close()
 
-        # Check that after connection lost aonther client is still cant lock resource
+        # Check that after connection lost another client is still cant lock resource
         resp = self.connection2.send_command('AQ 1')
         self.assertEqual(resp, '0')
+
+        # Not released keys is still in FIND results
+        resp1 = json.loads(self.connection2.send_command('FIND *'))
+        self.assertTrue(resp1, list)
+        self.assertEqual(len(resp1), 1)
+
         time.sleep(release_all_timeout - 1)
 
         # Check that after connection lost another client is still cant lock resource
@@ -226,7 +283,7 @@ class TestLiveLock(unittest.TestCase):
         resp = self.connection.send_command('AQ 1')
         self.assertEqual(resp, '1')
 
-        self.connection_dupe = LiveLockConnection(client_id=self.connection._client_id)
+        self.connection_dupe = LiveLockConnection(client_id=self.connection._client_id, port=port, password=password)
         self.connection_dupe.send_command('PING')
 
         # Closing connection
@@ -236,6 +293,24 @@ class TestLiveLock(unittest.TestCase):
         # Connection is dropped but lock must stay locked
         resp = self.connection_dupe.send_command('LOCKED 1')
         self.assertEqual(resp, '1')
+
+        resp = self.connection2.send_command('AQ prefix2')
+        self.assertEqual(resp, '1')
+
+        # Two keys must be in FIND result
+        resp1 = json.loads(self.connection.send_command('FIND *'))
+        self.assertTrue(resp1, list)
+        self.assertEqual(len(resp1), 2)
+
+        resp2 = json.loads(self.connection2.send_command('FIND *'))
+        self.assertTrue(resp2, list)
+        self.assertEqual(len(resp2), 2)
+
+        resp2 = json.loads(self.connection2.send_command('FIND prefix*'))
+        self.assertTrue(resp2, list)
+        self.assertEqual(len(resp2), 1)
+        self.assertTrue('prefix2' in [x[0] for x in resp2])
+        self.assertAlmostEqual([int(x[1] / 10) for x in resp2][0], int(time.time() / 10), 1)
 
         resp = self.connection_dupe.send_command('RELEASE 1')
         self.assertEqual(resp, '1')
@@ -270,3 +345,18 @@ class TestLiveLock(unittest.TestCase):
     def tearDown(self):
         if self.server:
             self.server.terminate()
+
+    def _start_server(self, release_all_timeout, password=None, port=None):
+        if not port:
+            port = random.randint(DEFAULT_LIVELOCK_SERVER_PORT+1, DEFAULT_LIVELOCK_SERVER_PORT + 4)
+        os.environ['LIVELOCK_PORT'] = str(port)
+        if password:
+            os.environ['LIVELOCK_PASSWORD'] = password
+
+        from livelock.server import start
+        self.server = Process(target=start, kwargs=dict(release_all_timeout=release_all_timeout))
+        self.server.start()
+        os.environ.pop('LIVELOCK_PORT')
+        if password:
+            os.environ.pop('LIVELOCK_PASSWORD')
+        return port
