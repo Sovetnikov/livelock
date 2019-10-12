@@ -1,0 +1,11 @@
+language: python
+cache: pip
+python:
+  - 3.7
+install:
+  - pip install -e .
+script:
+  - pytest
+matrix:
+  include:
+    - python: 3.7
