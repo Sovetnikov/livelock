@@ -1,16 +1,16 @@
 import json
 import logging
-import os
 import socket
 import threading
 import time
 
 from livelock.connection import SocketBuffer
-from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD
+from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp
 
 logger = logging.getLogger(__name__)
 
 threadLocal = threading.local()
+
 
 def configure(host=None, port=None, password=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
@@ -97,44 +97,85 @@ class LiveLockConnection(object):
 
     def _send_connect(self):
         if self._password:
-            resp = self.send_command('PASS ' + self._password, reconnect=False)
+            resp = self.send_command('PASS', self._password, reconnect=False)
 
         if self._client_id:
-            resp = self.send_command('CONN ' + self._client_id)
-            client_id = resp.strip('+')
+            client_id = self.send_command('CONN', self._client_id)
             if client_id != self._client_id:
-                raise Exception('client_id != self._client_id')
+                raise Exception('client_id ({client_id}) != self._client_id ({self._client_id})'.format(**locals()))
         else:
-            resp = self.send_command('CONN')
-            client_id = resp.strip('+')
+            client_id = self.send_command('CONN')
             self._client_id = client_id
 
+    def _read_int(self):
+        line = self._buffer.readline()
+        return int(line.decode().strip())
+
+    def _read_float(self):
+        line = self._buffer.readline()
+        return float(line.decode().strip())
+
+    def _read_bytes(self):
+        len = self._read_int()
+        line = self._buffer.read(max(2, len + 2))
+        if line[-1] != ord(b'\n'):
+            raise Exception(r"line[-1] != ord(b'\n')")
+        if len < 0:
+            return None
+        if len == 0:
+            return b''
+        return line[:-2]
+
+    def _read_array(self):
+        len = self._read_int()
+        r = []
+        while len:
+            c = self._buffer.read(1)
+            value = self._receive_resp(c)
+            r.append(value)
+            len -= 1
+        return r
+
+    def _receive_resp(self, c):
+        if c == b':':
+            return self._read_int()
+        elif c == b'$':
+            return self._read_bytes()
+        elif c == b'*':
+            return self._read_array()
+        elif c == b',':
+            return self._read_float()
+        else:
+            raise Exception('Unknown RESP start char %s' % c)
+
     def _read_response(self):
-        response = self._buffer.readline()
-        if not response:
-            raise LiveLockClientException('Empty server response')
-
-        mark = chr(response[0])
-
-        if mark == '-':
-            data = response[1:].decode()
+        c = self._buffer.read(1)
+        if c in b':*$,':
+            value = self._receive_resp(c)
+            return value
+        elif c == b'+':
+            response = self._buffer.readline()
+            data = response.decode()
+            return data
+        elif c == b'-':
+            response = self._buffer.readline()
+            data = response.decode()
             code = data.split(' ')[0]
             msg = data.replace(code, '').strip()
             code.strip('-')
             raise LiveLockClientException(msg, code)
-        elif mark == '+':
-            data = response[1:].decode()
-            return data
-        elif mark == '$':
-            data = response[1:].decode()
-            length = int(data)
-            if length <= 0:
-                return None
-            data = self._buffer.read(length)
-            return data
-        raise LiveLockClientException('Unknown server response: ' + str(response[:50]))
+        else:
+            raise LiveLockClientException('Unknown char in RESP response start %s' % c)
 
-    def send_command(self, command, reconnect=True):
+    def send_raw_command(self, command, reconnect=True):
+        payload = command.encode()+b'\r\n'
+        return self._send_command(payload, reconnect=reconnect)
+
+    def send_command(self, command, *args, reconnect=True):
+        payload = pack_resp(([command, ] + list(args)) if args else [command, ])
+        return self._send_command(payload, reconnect=reconnect)
+
+    def _send_command(self, payload, reconnect=True):
         self._connect()
 
         data = None
@@ -143,12 +184,10 @@ class LiveLockConnection(object):
         while reconnect_attempts:
             try:
                 # if connection lost on AQ command, lock can be acquired by server but we can lost success response from server
-                pay_load = command.encode()
-                pay_load_len = len(pay_load)
-                if pay_load_len > self._max_payload + 1:
-                    raise LiveLockClientException('Max command payload size exceeded {pay_load_len}b with limit of {self._max_payload}b'.format(**locals()))
-                self._sock.sendall(pay_load)
-                self._sock.sendall('\n'.encode())
+                payload_len = len(payload)
+                if payload_len > self._max_payload + 1:
+                    raise LiveLockClientException('Max command payload size exceeded {payload_len}b with limit of {self._max_payload}b'.format(**locals()))
+                self._sock.sendall(payload)
                 send_success = True
                 data = self._read_response()
                 break
@@ -160,13 +199,12 @@ class LiveLockConnection(object):
                 logger.debug('Got connection error, reconnecting')
                 time.sleep(self._reconnect_timeout)
                 if send_success:
-                    if command.lower().startswith('aq '):
-                        # if AQ command is retried then making it reentrant
-                        command = command.replace(command[0:3], 'AQR ')
-                        logger.debug('Making reentrant lock request')
+                    # FIXME: if AQ command sended, but answer is not received make AQR on next try
+                    pass
                 self._reconnect()
 
         return data
+
 
 class LiveLock(object):
     def __init__(self, id, acquire_timeout=10, live_lock_connection=None):
@@ -182,8 +220,11 @@ class LiveLock(object):
     @classmethod
     def find(cls, pattern):
         connection = _get_connection()
-        data = connection.send_command('FIND ' + pattern)
-        return json.loads(data)
+        data = connection.send_command('FIND', pattern)
+        for row in data:
+            # decoding lock ID's
+            row[0] = row[0].decode()
+        return data
 
     def acquire(self, blocking=True):
         if blocking is True:
@@ -217,17 +258,17 @@ class LiveLock(object):
             pass
 
     def _acquire(self):
-        command = 'AQR ' if self.reentrant else 'AQ '
-        resp = self._connection.send_command(command + self.id)
+        command = 'AQR' if self.reentrant else 'AQ'
+        resp = self._connection.send_command(command, self.id)
         return resp == '1'
 
     def release(self, reconnect=True):
-        resp = self._connection.send_command('RELEASE ' + self.id, reconnect=reconnect)
+        resp = self._connection.send_command('RELEASE', self.id, reconnect=reconnect)
         self.acquired = False
         return resp == '1'
 
     def locked(self):
-        resp = self._connection.send_command('LOCKED ' + self.id)
+        resp = self._connection.send_command('LOCKED', self.id)
         return resp == '1'
 
     def ping(self):

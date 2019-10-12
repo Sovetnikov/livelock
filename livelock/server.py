@@ -1,12 +1,12 @@
 import asyncio
-import json
 import logging
 import time
 import uuid
+from asyncio import StreamReader, IncompleteReadError
 from collections import defaultdict
 from fnmatch import fnmatch
 
-from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD
+from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +45,17 @@ WRONG_ARGS = 2
 CONN_HAS_ID_ERROR = 3
 UNKNOWN_COMMAND_ERROR = 4
 PASS_ERROR = 5
+RESP_ERROR = 6
+SERVER_ERROR = 7
 
 ERRORS = {
     CONN_REQUIRED_ERROR: 'CONN required first',
     WRONG_ARGS: 'Wrong number of arguments',
     CONN_HAS_ID_ERROR: 'Already has client id',
     UNKNOWN_COMMAND_ERROR: 'Unknown command',
-    PASS_ERROR: 'Wrong or no password'
+    PASS_ERROR: 'Wrong or no password',
+    RESP_ERROR: 'RESP protocol error',
+    SERVER_ERROR: 'Server error',
 }
 
 
@@ -148,43 +152,108 @@ class InMemoryLockStorage(LockStorage):
 
 
 class CommandProtocol(asyncio.Protocol):
-    command_terminator = None
-
     def __init__(self, max_payload, *args, **kwargs):
-        self._buffer = bytearray()
         self.transport = None
         self.max_payload = max_payload
-        super().__init__(*args, **kwargs)
+        self._reader = None
+        super().__init__(
+            # stream_reader=self._reader
+        )
+
+    def data_received(self, data):
+        self._reader.feed_data(data)
 
     def connection_made(self, transport):
         self.transport = transport
+        self._reader = StreamReader()
+        self._reader.set_transport(transport)
 
-    def data_received(self, data):
-        self._buffer.extend(data)
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.receive_commands())
+        super().connection_made(transport)
 
-        while True:
-            if len(self._buffer) >= self.max_payload:
-                # seems strange large request, silently close connection
-                peername = self.transport.get_extra_info('peername')
-                logger.debug(f'Dropping connection from {peername} with large payload {len(self._buffer)} bytes')
-                self.transport.close()
-                break
-            index = self._buffer.find(self.command_terminator.encode())
-            if index >= 0:
-                command = self._buffer[0:index]
-                self._buffer = self._buffer[index + 1:]
-                self.on_command_received(command)
+    def connection_lost(self, exc):
+        if self._reader is not None:
+            if exc is None:
+                self._reader.feed_eof()
             else:
-                break
+                self._reader.set_exception(exc)
+        super().connection_lost(exc)
 
-    def on_command_received(self, command):
+    def eof_received(self):
+        self._reader.feed_eof()
+        return super().eof_received()
+
+    async def _read_int(self):
+        line = await self._reader.readuntil(b'\r\n')
+        return int(line.decode().strip())
+
+    async def _read_float(self):
+        line = await self._reader.readuntil(b'\r\n')
+        return float(line.decode().strip())
+
+    async def _read_bytes(self):
+        len = await self._read_int()
+        line = await self._reader.readexactly(max(2, len + 2))
+        if line[-1] != ord(b'\n'):
+            raise Exception(r"line[-1] != ord(b'\n')")
+        if len < 0:
+            return None
+        if len == 0:
+            return b''
+        return line[:-2]
+
+    async def _read_array(self):
+        len = await self._read_int()
+        r = []
+        while len:
+            c = await self._reader.readexactly(1)
+            value = await self._receive_resp(c)
+            r.append(value)
+            len -= 1
+        return r
+
+    async def _receive_resp(self, c):
+        if c == b':':
+            return await self._read_int()
+        elif c == b'$':
+            return await self._read_bytes()
+        elif c == b'*':
+            return await self._read_array()
+        elif c == b',':
+            return await self._read_float()
+        else:
+            raise Exception('Unknown RESP start char %s' % c)
+
+    async def receive_commands(self):
+        while True:
+            try:
+                c = await self._reader.readexactly(1)
+                if c in b':*$,':
+                    value = await self._receive_resp(c)
+                    if not isinstance(value, list):
+                        value = [value, ]
+                else:
+                    command = c + await self._reader.readuntil(b'\r\n')
+                    value = [x.strip().encode() for x in command.decode().split(' ')]
+            except IncompleteReadError:
+                # Connection is closed
+                return
+            await self.on_command_received(*value)
+
+    def _reply_error(self, code, text=None):
+        if not text:
+            text = ERRORS[code]
+        content = '-%s %s\r\n' % (code, text)
+        self.transport.write(content.encode())
+
+    async def on_command_received(self, command):
         raise NotImplemented()
 
 
 class LiveLockProtocol(CommandProtocol):
     def __init__(self, storage, password, max_payload, *args, **kwargs):
         self.password = password
-        self.command_terminator = '\n'
         super().__init__(max_payload=max_payload, *args, **kwargs)
         self.storage = storage
         self.client_id = None
@@ -194,6 +263,7 @@ class LiveLockProtocol(CommandProtocol):
         peername = transport.get_extra_info('peername')
         logger.debug(f'Connection from {peername}')
         self.transport = transport
+        super().connection_made(transport)
 
     def connection_lost(self, exc):
         peername = self.transport.get_extra_info('peername')
@@ -204,21 +274,19 @@ class LiveLockProtocol(CommandProtocol):
                 # Releasing all client locks only if last known connection is dropped
                 # other old connection can be dead
                 self.storage.release_all(self.client_id)
+        super().connection_lost(exc)
 
-    def on_command_received(self, command):
-        command = command.decode().strip()
+    async def on_command_received(self, command, *args):
         peername = self.transport.get_extra_info('peername')
 
-        parts = command.split(' ')
-        verb = parts[0].strip().lower()
+        verb = command.decode().lower()
         logger.debug(f'Got command {command} from {peername}' if verb != 'pass' else f'Got command PASS from {peername}')
-        args = [x.strip() for x in parts[1:]]
-        args = [x for x in args if x]
 
         if self.password and not self._authorized:
             if verb == 'pass':
-                if len(args) == 1:
-                    if args[0] == self.password:
+                if len(args) == 1 and args[0]:
+                    password = args[0].decode()
+                    if password == self.password:
                         self._authorized = True
                         self._reply(True)
                         return
@@ -229,7 +297,10 @@ class LiveLockProtocol(CommandProtocol):
             if self.client_id:
                 self._reply_error(CONN_HAS_ID_ERROR)
             if args:
-                self.client_id = args[0]
+                if not args[0]:
+                    self._reply_error(WRONG_ARGS)
+                    return
+                self.client_id = args[0].decode()
                 # Restoring client locks
                 self.storage.unrelease_all(self.client_id)
             else:
@@ -243,47 +314,57 @@ class LiveLockProtocol(CommandProtocol):
                 self._reply_error(CONN_REQUIRED_ERROR)
                 return
             if verb in ('aq', 'aqr'):
-                if len(args) != 1:
+                if len(args) != 1 or not args[0]:
                     self._reply_error(WRONG_ARGS)
                     return
-                res = self.acquire(client_id=self.client_id, lock_id=args[0], reentrant=(verb == 'aqr'))
+                try:
+                    lock_id = args[0].decode()
+                except:
+                    self._reply_error(WRONG_ARGS)
+                    return
+                res = self.acquire(client_id=self.client_id, lock_id=lock_id, reentrant=(verb == 'aqr'))
                 self._reply(res)
             elif verb == 'release':
-                if len(args) != 1:
+                if len(args) != 1 or not args[0]:
                     self._reply_error(WRONG_ARGS)
                     return
-                res = self.release(client_id=self.client_id, lock_id=args[0])
+                try:
+                    lock_id = args[0].decode()
+                except:
+                    self._reply_error(WRONG_ARGS)
+                    return
+                res = self.release(client_id=self.client_id, lock_id=lock_id)
                 self._reply(res)
             elif verb == 'locked':
-                if len(args) != 1:
+                if len(args) != 1 or not args[0]:
                     self._reply_error(WRONG_ARGS)
                     return
-                res = self.locked(lock_id=args[0])
+                try:
+                    lock_id = args[0].decode()
+                except:
+                    self._reply_error(WRONG_ARGS)
+                    return
+                res = self.locked(lock_id=lock_id)
                 self._reply(res)
             elif verb == 'ping':
                 self._reply('PONG')
             elif verb == 'find':
-                if len(args) != 1:
+                if len(args) != 1 or not args[0]:
                     self._reply_error(WRONG_ARGS)
                     return
-                result = list(self.storage.find(args[0]))
+                result = list(self.storage.find(args[0].decode()))
                 self._reply_data(result)
             else:
                 self._reply_error(UNKNOWN_COMMAND_ERROR)
 
-    def _reply_error(self, code, text=None):
-        if not text:
-            text = ERRORS[code]
-        self.transport.write(f'-{code} {text}\r\n'.encode())
-
     def _reply_data(self, data):
-        payload = json.dumps(data, separators=(',', ':')).encode()
-        self.transport.write(f'${len(payload)}\r\n'.encode())
+        payload = pack_resp(data)
         self.transport.write(payload)
-        self.transport.write('\r\n'.encode())
 
     def _reply(self, content):
-        self.transport.write(f'+{content}\r\n'.encode())
+        payload = '+%s\r\n' % content
+        payload = payload.encode()
+        self.transport.write(payload)
 
     def acquire(self, client_id, lock_id, reentrant):
         res = self.storage.acquire(client_id, lock_id, reentrant)

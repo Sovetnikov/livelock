@@ -78,8 +78,9 @@ class SocketBuffer(object):
             raise ConnectionError("Error while reading from socket: %s" %
                                   (e.args,))
 
-    def read(self, length):
-        length = length + 2  # make sure to read the \r\n terminator
+    def read(self, length, read_terminator=False):
+        if read_terminator:
+            length = length + 2  # make sure to read the \r\n terminator
         # make sure we've read enough data from the socket
         if length > self.length:
             self._read_from_socket(length - self.length)
@@ -92,8 +93,10 @@ class SocketBuffer(object):
         # grow forever
         if self.bytes_read == self.bytes_written:
             self.purge()
-
-        return data[:-2]
+        
+        if read_terminator:
+            return data[:-2]
+        return data
 
     def readline(self):
         buf = self._buffer
