@@ -1,12 +1,12 @@
 from setuptools import setup
 
 __title__ = 'livelock'
-__version__ = '0.1'
+__version__ = '0.2'
 __author__ = 'Artem Sovetnikov'
 
 setup(name='livelock',
       version=__version__,
-      description='Distributed lock server and client with process termination monitoring',
+      description='Distributed lock server without ttl and client processes death detection',
       url='',
       author=__author__,
       author_email='asovetnikov@gmail.com',
