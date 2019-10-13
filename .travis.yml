@@ -20,6 +20,9 @@ matrix:
   - python: 3.7
 deploy:
   provider: pypi
+  skip_existing: true
+  on:
+    branch: master
   user: "__token__"
 #  true:
 #    all_branches: true
