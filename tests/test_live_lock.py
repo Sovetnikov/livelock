@@ -17,7 +17,19 @@ logger = logging.getLogger(__name__)
 import logging
 
 
+def is_port_open(host, port, timeout=5):
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    result = sock.connect_ex((host, int(port)))
+    return result == 0
+
+
 class TestLiveLock(unittest.TestCase):
+    def __init__(self, *args, **kwargs):
+        self.server = None
+        super().__init__(*args, **kwargs)
+
     def setUp(self):
         self.network_disabled = False
         self.killed_connection = 0
@@ -180,7 +192,7 @@ class TestLiveLock(unittest.TestCase):
 
         self.connection = LiveLockConnection(port=port)
         self.connection2 = LiveLockConnection(password=password, port=port)
-        
+
         if raw:
             def self_connection_send_command(command):
                 return self.connection.send_raw_command(command)
@@ -190,6 +202,7 @@ class TestLiveLock(unittest.TestCase):
         else:
             def self_connection_send_command(command):
                 return self.connection.send_command(*command.split(' '))
+
             def self_connection2_send_command(command):
                 return self.connection2.send_command(*command.split(' '))
 
@@ -386,7 +399,7 @@ class TestLiveLock(unittest.TestCase):
 
     def _start_server(self, release_all_timeout, password=None, port=None):
         if not port:
-            port = random.randint(DEFAULT_LIVELOCK_SERVER_PORT+1, DEFAULT_LIVELOCK_SERVER_PORT + 4)
+            port = random.randint(DEFAULT_LIVELOCK_SERVER_PORT + 1, DEFAULT_LIVELOCK_SERVER_PORT + 4)
         os.environ['LIVELOCK_PORT'] = str(port)
         if password:
             os.environ['LIVELOCK_PASSWORD'] = password
@@ -394,7 +407,14 @@ class TestLiveLock(unittest.TestCase):
         from livelock.server import start
         self.server = Process(target=start, kwargs=dict(release_all_timeout=release_all_timeout))
         self.server.start()
+
         os.environ.pop('LIVELOCK_PORT')
         if password:
             os.environ.pop('LIVELOCK_PASSWORD')
+        for n in range(10):
+            print('Waiting server process PID %s (exitcode=%s)' % (self.server.pid, self.server.exitcode))
+            if is_port_open('127.0.0.1', port):
+                break
+            time.sleep(1)
+        self.assertTrue(is_port_open('127.0.0.1', port))
         return port
