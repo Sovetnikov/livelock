@@ -47,6 +47,7 @@ UNKNOWN_COMMAND_ERROR = 4
 PASS_ERROR = 5
 RESP_ERROR = 6
 SERVER_ERROR = 7
+KEY_NOT_EXISTS = 8
 
 ERRORS = {
     CONN_REQUIRED_ERROR: 'CONN required first',
@@ -56,21 +57,35 @@ ERRORS = {
     PASS_ERROR: 'Wrong or no password',
     RESP_ERROR: 'RESP protocol error',
     SERVER_ERROR: 'Server error',
+    KEY_NOT_EXISTS: 'Key does not exists'
 }
 
 
 class MemoryLockInfo(object):
-    def __init__(self, id, time, ttl=None):
+    __slots__ = ('id', 'time', 'mark_free_after', 'signals')
+
+    def __init__(self, id, time):
         self.id = id
-        self.ttl = ttl
         self.time = time
         self.mark_free_after = None
+        self.signals = None
 
     def expired(self):
         if self.mark_free_after:
             return time.time() >= self.mark_free_after
         return False
 
+    def add_signal(self, signal):
+        if self.signals is None:
+            self.signals = set()
+        self.signals.add(signal)
+
+    def remove_signal(self, signal):
+        if self.signals is not None:
+            self.signals.remove(signal)
+
+    def has_signal(self, signal):
+        return self.signals is not None and signal in self.signals
 
 class InMemoryLockStorage(LockStorage):
     def __init__(self, *args, **kwargs):
@@ -149,6 +164,31 @@ class InMemoryLockStorage(LockStorage):
                 continue
             if fnmatch(lock_id, pattern):
                 yield (lock_id, lock_info.time)
+
+    def add_signal(self, lock_id, signal):
+        lock_info = self.all_locks.get(lock_id)
+        if not lock_info:
+            return KEY_NOT_EXISTS
+        lock_info.add_signal(signal)
+        return True
+
+    def has_signal(self, lock_id, signal):
+        lock_info = self.all_locks.get(lock_id)
+        if not lock_info:
+            return KEY_NOT_EXISTS
+        return lock_info.has_signal(signal)
+
+    def remove_signal(self, lock_id, signal):
+        lock_info = self.all_locks.get(lock_id)
+        if not lock_info:
+            return KEY_NOT_EXISTS
+        if lock_info.signals is None:
+            return False
+        try:
+            lock_info.signals.remove(signal)
+            return True
+        except:
+            return False
 
 
 class CommandProtocol(asyncio.Protocol):
@@ -241,12 +281,6 @@ class CommandProtocol(asyncio.Protocol):
                 return
             await self.on_command_received(*value)
 
-    def _reply_error(self, code, text=None):
-        if not text:
-            text = ERRORS[code]
-        content = '-%s %s\r\n' % (code, text)
-        self.transport.write(content.encode())
-
     async def on_command_received(self, command):
         raise NotImplemented()
 
@@ -290,15 +324,15 @@ class LiveLockProtocol(CommandProtocol):
                         self._authorized = True
                         self._reply(True)
                         return
-            self._reply_error(PASS_ERROR)
+            self._reply(PASS_ERROR)
             self.transport.close()
 
         if verb == 'conn':
             if self.client_id:
-                self._reply_error(CONN_HAS_ID_ERROR)
+                self._reply(CONN_HAS_ID_ERROR)
             if args:
                 if not args[0]:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 self.client_id = args[0].decode()
                 # Restoring client locks
@@ -311,78 +345,129 @@ class LiveLockProtocol(CommandProtocol):
             return
         else:
             if not self.client_id:
-                self._reply_error(CONN_REQUIRED_ERROR)
+                self._reply(CONN_REQUIRED_ERROR)
                 return
             if verb in ('aq', 'aqr'):
                 if len(args) != 1 or not args[0]:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 try:
                     lock_id = args[0].decode()
                 except:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 res = self.acquire(client_id=self.client_id, lock_id=lock_id, reentrant=(verb == 'aqr'))
                 self._reply(res)
             elif verb == 'release':
                 if len(args) != 1 or not args[0]:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 try:
                     lock_id = args[0].decode()
                 except:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 res = self.release(client_id=self.client_id, lock_id=lock_id)
                 self._reply(res)
             elif verb == 'locked':
                 if len(args) != 1 or not args[0]:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 try:
                     lock_id = args[0].decode()
                 except:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 res = self.locked(lock_id=lock_id)
+                self._reply(res)
+            elif verb == 'sigset':
+                if len(args) != 2 or not args[0] or not args[1]:
+                    self._reply(WRONG_ARGS)
+                    return
+                try:
+                    lock_id = args[0].decode()
+                    signal = args[1].decode()
+                except:
+                    self._reply(WRONG_ARGS)
+                    return
+                res = self.add_signal(lock_id, signal)
+                self._reply(res)
+            elif verb == 'sigexists':
+                if len(args) != 2 or not args[0] or not args[1]:
+                    self._reply(WRONG_ARGS)
+                    return
+                try:
+                    lock_id = args[0].decode()
+                    signal = args[1].decode()
+                except:
+                    self._reply(WRONG_ARGS)
+                    return
+                res = self.has_signal(lock_id, signal)
+                self._reply(res)
+            elif verb == 'sigdel':
+                if len(args) != 2 or not args[0] or not args[1]:
+                    self._reply(WRONG_ARGS)
+                    return
+                try:
+                    lock_id = args[0].decode()
+                    signal = args[1].decode()
+                except:
+                    self._reply(WRONG_ARGS)
+                    return
+                res = self.remove_signal(lock_id, signal)
                 self._reply(res)
             elif verb == 'ping':
                 self._reply('PONG')
             elif verb == 'find':
                 if len(args) != 1 or not args[0]:
-                    self._reply_error(WRONG_ARGS)
+                    self._reply(WRONG_ARGS)
                     return
                 result = list(self.storage.find(args[0].decode()))
                 self._reply_data(result)
             else:
-                self._reply_error(UNKNOWN_COMMAND_ERROR)
+                self._reply(UNKNOWN_COMMAND_ERROR)
 
     def _reply_data(self, data):
         payload = pack_resp(data)
         self.transport.write(payload)
 
     def _reply(self, content):
-        payload = '+%s\r\n' % content
+        prefix = '+'
+        if content is True:
+            content = '1'
+        elif content is False:
+            content = '0'
+        elif isinstance(content, int):
+            content = '%s %s' % (content, ERRORS[content])
+            prefix = '-'
+
+        payload = '%s%s\r\n' % (prefix, content)
         payload = payload.encode()
         self.transport.write(payload)
 
     def acquire(self, client_id, lock_id, reentrant):
         res = self.storage.acquire(client_id, lock_id, reentrant)
-        if res:
-            return '1'
-        return '0'
+        return res
 
     def release(self, client_id, lock_id):
         res = self.storage.release(client_id, lock_id)
-        if res:
-            return '1'
-        return '0'
+        return res
 
     def locked(self, lock_id):
         res = self.storage.locked(lock_id)
-        if res:
-            return '1'
-        return '0'
+        return res
+
+    def add_signal(self, lock_id, signal):
+        res = self.storage.add_signal(lock_id, signal.lower())
+        return res
+
+    def has_signal(self, lock_id, signal):
+        res = self.storage.has_signal(lock_id, signal.lower())
+        return res
+
+    def remove_signal(self, lock_id, signal):
+        res = self.storage.remove_signal(lock_id, signal.lower())
+        return res
 
 
 async def live_lock_server(bind_to, port, release_all_timeout, password=None, max_payload=None):

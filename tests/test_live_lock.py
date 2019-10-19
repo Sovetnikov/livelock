@@ -161,7 +161,8 @@ class TestLiveLock(unittest.TestCase):
             self.connection._sock.close()
             time.sleep(release_all_timeout + 0.2)
 
-            with LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2) as lock2:
+            id1 = LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2)
+            with id1 as lock2:
                 self.assertTrue(lock2.acquired)
 
                 with self.assertRaises(LiveLockClientTimeoutException) as exc:
@@ -174,6 +175,10 @@ class TestLiveLock(unittest.TestCase):
                     pattern_result = LiveLock.find('prefix*')
                     self.assertTrue('prefix2' in [x[0] for x in pattern_result])
 
+                id1.cancel()
+                self.assertTrue(id1.canceled())
+            # When lock does not exists, high level api returns True on cancelled()
+            self.assertTrue(id1.canceled())
             self.assertFalse(LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).locked())
 
         self.server.terminate()
@@ -194,32 +199,32 @@ class TestLiveLock(unittest.TestCase):
         self.connection2 = LiveLockConnection(password=password, port=port)
 
         if raw:
-            def self_connection_send_command(command):
+            def command1(command):
                 return self.connection.send_raw_command(command)
 
-            def self_connection2_send_command(command):
+            def command2(command):
                 return self.connection2.send_raw_command(command)
         else:
-            def self_connection_send_command(command):
+            def command1(command):
                 return self.connection.send_command(*command.split(' '))
 
-            def self_connection2_send_command(command):
+            def command2(command):
                 return self.connection2.send_command(*command.split(' '))
 
         if password:
             with self.assertRaises(LiveLockClientException) as exc:
-                self_connection_send_command('CONN')
+                command1('CONN')
             self.assertTrue('password' in str(exc.exception))
 
             with self.assertRaises(LiveLockClientException) as exc:
-                self_connection_send_command('AQ 1')
+                command1('AQ 1')
             self.assertTrue('password' in str(exc.exception))
 
             self.connection = LiveLockConnection(password=password, port=port)
 
-        # Test large command payload warning on cliend side
+        # Test large command payload warning on client side
         # with self.assertRaises(LiveLockClientException) as exc:
-        #     self_connection_send_command('CONN ' + 'x'*self.connection._max_payload)
+        #     command1('CONN ' + 'x'*self.connection._max_payload)
         # self.assertFalse(exc.exception.code)
         # self.assertTrue('exceeded' in str(exc.exception))
 
@@ -227,82 +232,114 @@ class TestLiveLock(unittest.TestCase):
         # Test large command payload warning on cliend side
         # self.connection._max_payload = self.connection._max_payload*2
         # with self.assertRaises(LiveLockClientException) as exc:
-        #     self_connection_send_command('CONN ' + 'x'*self.connection._max_payload)
+        #     command1('CONN ' + 'x'*self.connection._max_payload)
         # self.assertFalse(exc.exception.code)
 
         # Base check for lock
-        resp = self_connection_send_command('AQ 1')
+        resp = command1('AQ 1')
         self.assertEqual(resp, '1')
 
-        resp1 = self_connection_send_command('FIND *')
+        resp1 = command1('FIND *')
         self.assertTrue(resp1, resp1)
         self.assertEqual(resp1[0][0], b'1')
         self.assertTrue(isinstance(resp1[0][1], float))
         self.assertEqual(len(resp1[0]), 2)
         self.assertEqual(len(resp1), 1)
 
-        resp2 = self_connection2_send_command('FIND *')
+        resp2 = command2('FIND *')
         self.assertTrue(resp2, list)
         self.assertEqual(len(resp2), 1)
         self.assertEqual(resp1[0], resp2[0])
+        
+        resp1 = command1('SIGSET 1 SIG1')
+        self.assertEqual(resp1, '1')
 
-        # FIND all clients can find all keys
-        resp = self_connection_send_command('LOCKED 1')
+        resp1 = command1('SIGEXISTS 1 SIG1')
+        self.assertEqual(resp1, '1')
+
+        resp1 = command1('SIGEXISTS 1 SIG3')
+        self.assertEqual(resp1, '0')
+
+        resp1 = command1('SIGSET 1 SIG1')
+        self.assertEqual(resp1, '1')
+
+        # Any client can see any signals
+        resp2 = command1('SIGEXISTS 1 SIG1')
+        self.assertEqual(resp2, '1')
+
+        # Any client can set signals for any lock
+        resp2 = command2('SIGSET 1 SIG2')
+        self.assertEqual(resp2, '1')
+
+        resp2 = command1('SIGEXISTS 1 SIG2')
+        self.assertEqual(resp1, '1')
+
+        resp2 = command2('SIGSET 1 SIG1')
+        self.assertEqual(resp2, '1')
+
+        # Any client can delete any signals
+        resp1 = command1('SIGDEL 1 SIG2')
+        self.assertEqual(resp1, '1')
+
+        resp1 = command1('SIGDEL 1 SIG2')
+        self.assertEqual(resp1, '0')
+
+        resp = command1('LOCKED 1')
         self.assertEqual(resp, '1')
 
         # Base check for lock fail on another client
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '0')
 
-        resp = self_connection2_send_command('LOCKED 1')
+        resp = command2('LOCKED 1')
         self.assertEqual(resp, '1')
 
         # Check reetrant disabled
-        resp = self_connection_send_command('AQ 1')
+        resp = command1('AQ 1')
         self.assertEqual(resp, '0')
 
         # Check reetrant lock works
-        resp = self_connection_send_command('AQR 1')
+        resp = command1('AQR 1')
         self.assertEqual(resp, '1')
 
         # Check reetrant fails on another client
-        resp = self_connection2_send_command('AQR 1')
+        resp = command2('AQR 1')
         self.assertEqual(resp, '0')
 
         # Breaking connection
         self.connection._sock.close()
 
         # Check that after connection lost another client is still cant lock resource
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '0')
 
         # Not released keys is still in FIND results
-        resp1 = self_connection2_send_command('FIND *')
+        resp1 = command2('FIND *')
         self.assertTrue(resp1, list)
         self.assertEqual(len(resp1), 1)
 
         time.sleep(release_all_timeout - 1)
 
         # Check that after connection lost another client is still cant lock resource
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '0')
 
         # Restoring connection
-        resp = self_connection_send_command('PING')
+        resp = command1('PING')
         self.assertEqual(resp, 'PONG')
 
         # Still cant lock at time after release_all_timeout passed
         time.sleep(1)
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '0')
 
         # Still cant lock at time after release_all_timeout passed
         time.sleep(1)
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '0')
 
         # First connection still has lock
-        resp = self_connection_send_command('AQ 1')
+        resp = command1('AQ 1')
         self.assertEqual(resp, '0')
 
         # Breaking connection and waiting until release_all_timeout
@@ -310,23 +347,23 @@ class TestLiveLock(unittest.TestCase):
         self.connection._sock.close()
         time.sleep(release_all_timeout + 0.2)
 
-        resp = self_connection2_send_command('LOCKED 1')
+        resp = command2('LOCKED 1')
         self.assertEqual(resp, '0')
 
-        resp = self_connection2_send_command('AQ 1')
+        resp = command2('AQ 1')
         self.assertEqual(resp, '1')
 
-        resp = self_connection_send_command('AQ 1')
+        resp = command1('AQ 1')
         self.assertEqual(resp, '0')
 
-        resp = self_connection2_send_command('RELEASE 1')
+        resp = command2('RELEASE 1')
         self.assertEqual(resp, '1')
 
         # Check situation when connection is timedout but server does not know about it
         # and second connection made from same client
         # then first connection is dropped - all locks must remain locked
 
-        resp = self_connection_send_command('AQ 1')
+        resp = command1('AQ 1')
         self.assertEqual(resp, '1')
 
         self.connection_dupe = LiveLockConnection(client_id=self.connection._client_id, port=port, password=password)
@@ -345,19 +382,19 @@ class TestLiveLock(unittest.TestCase):
         resp = self.connection_dupe.send_command('LOCKED', '1')
         self.assertEqual(resp, '1')
 
-        resp = self_connection2_send_command('AQ prefix2')
+        resp = command2('AQ prefix2')
         self.assertEqual(resp, '1')
 
         # Two keys must be in FIND result
-        resp1 = self_connection_send_command('FIND *')
+        resp1 = command1('FIND *')
         self.assertTrue(resp1, list)
         self.assertEqual(len(resp1), 2)
 
-        resp2 = self_connection2_send_command('FIND *')
+        resp2 = command2('FIND *')
         self.assertTrue(resp2, list)
         self.assertEqual(len(resp2), 2)
 
-        resp2 = self_connection2_send_command('FIND prefix*')
+        resp2 = command2('FIND prefix*')
         self.assertTrue(resp2, list)
         self.assertEqual(len(resp2), 1)
         self.assertTrue(b'prefix2' in [x[0] for x in resp2])
@@ -374,22 +411,22 @@ class TestLiveLock(unittest.TestCase):
             self.block_thread.start()
 
             while self.blocked_connection < 5:
-                resp = self_connection_send_command('AQ 1')
+                resp = command1('AQ 1')
                 self.assertEqual(resp, '1')
-                resp = self_connection2_send_command('AQ 1')
+                resp = command2('AQ 1')
                 self.assertEqual(resp, '0')
 
                 # Not reentrant
-                resp = self_connection_send_command('AQ 1')
+                resp = command1('AQ 1')
                 self.assertEqual(resp, '0')
-                resp = self_connection2_send_command('AQ 1')
+                resp = command2('AQ 1')
                 self.assertEqual(resp, '0')
 
                 time.sleep(1)
 
-                resp = self_connection_send_command('RELEASE 1')
+                resp = command1('RELEASE 1')
                 # if connection reset after release command send and before answer received, then resended command returns 0
-                self.assertIn(resp, ('1', '0'))
+                self.assertIn(resp, ('1 0'))
 
             self.server.terminate()
 
@@ -418,3 +455,9 @@ class TestLiveLock(unittest.TestCase):
             time.sleep(1)
         self.assertTrue(is_port_open('127.0.0.1', port))
         return port
+
+    @unittest.skip
+    def test_kv(self):
+        data = 'test'
+        with LiveLock('kvstore_test') as aq:
+            aq.set(data)

@@ -1,10 +1,10 @@
-import json
 import logging
 import socket
 import threading
 import time
 
 from livelock.connection import SocketBuffer
+from livelock.server import KEY_NOT_EXISTS
 from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ def _get_connection():
 
 class LiveLockClientException(Exception):
     def __init__(self, msg, code=None):
-        self.code = code
+        self.code = int(code) if code else None
         super().__init__(msg)
 
 
@@ -168,7 +168,7 @@ class LiveLockConnection(object):
             raise LiveLockClientException('Unknown char in RESP response start %s' % c)
 
     def send_raw_command(self, command, reconnect=True):
-        payload = command.encode()+b'\r\n'
+        payload = command.encode() + b'\r\n'
         return self._send_command(payload, reconnect=reconnect)
 
     def send_command(self, command, *args, reconnect=True):
@@ -199,8 +199,9 @@ class LiveLockConnection(object):
                 logger.debug('Got connection error, reconnecting')
                 time.sleep(self._reconnect_timeout)
                 if send_success:
-                    # FIXME: if AQ command sended, but answer is not received make AQR on next try
+                    # FIXME: if AQ command sended but answer is not received make AQR on next try
                     pass
+                # Maybe check that locked resources still locked and relock if necessary (in case lock server restarted)
                 self._reconnect()
 
         return data
@@ -274,6 +275,28 @@ class LiveLock(object):
     def ping(self):
         self._connection.send_command('PING')
 
+    def signal(self, signal):
+        resp = self._connection.send_command('SIGSET', self.id, signal)
+        return resp == '1'
+
+    def remove_signal(self, signal):
+        resp = self._connection.send_command('SIGDEL', self.id, signal)
+        return resp == '1'
+
+    def signal_exists(self, signal):
+        resp = self._connection.send_command('SIGEXISTS', self.id, signal)
+        return resp == '1'
+
+    def cancel(self):
+        return self.signal('CANCEL')
+
+    def canceled(self):
+        try:
+            return self.signal_exists('CANCEL')
+        except LiveLockClientException as e:
+            if e.code == KEY_NOT_EXISTS:
+                return True
+            raise e
 
 class LiveRLock(LiveLock):
     def __init__(self, *args, **kwargs):
