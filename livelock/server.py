@@ -276,7 +276,7 @@ class CommandProtocol(asyncio.Protocol):
                 else:
                     command = c + await self._reader.readuntil(b'\r\n')
                     value = [x.strip().encode() for x in command.decode().split(' ')]
-            except IncompleteReadError:
+            except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError):
                 # Connection is closed
                 return
             await self.on_command_received(*value)
@@ -489,7 +489,7 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None, ma
 
 
 def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password=None, max_payload=None):
-    logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+    logging.basicConfig(level=logging.INFO, format='%(name)s:[%(levelname)s]: %(message)s')
     asyncio.run(live_lock_server(bind_to=get_settings(bind_to, DEFAULT_BIND_TO, 'LIVELOCK_BIND_TO'),
                                  port=get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT),
                                  release_all_timeout=get_settings(release_all_timeout, 'LIVELOCK_RELEASE_ALL_TIMEOUT', DEFAULT_RELEASE_ALL_TIMEOUT),
