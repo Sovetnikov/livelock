@@ -110,34 +110,34 @@ class TestLiveLock(unittest.TestCase):
 
             # Base check for lock fail on another client
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=2, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
             self.assertTrue(LiveLock(id='1', live_lock_connection=self.connection2).locked())
 
             # Check reetrant disabled
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=2).__enter__()
+                LiveLock(id='1', timeout=2).__enter__()
 
             # Check reetrant lock works
-            reentrant_lock = LiveRLock(id='1', acquire_timeout=2).__enter__()
+            reentrant_lock = LiveRLock(id='1', timeout=2).__enter__()
             self.assertTrue(reentrant_lock.acquired)
 
             # Check reetrant fails on another client
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                reentrant_lock = LiveRLock(id='1', acquire_timeout=2, live_lock_connection=self.connection2).__enter__()
+                reentrant_lock = LiveRLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
             # Breaking connection
             self.connection._sock.close()
 
             # Check that after connection lost aonther client is still cant lock resource
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=2, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
             time.sleep(release_all_timeout - 3)
 
             # Check that after connection lost another client is still cant lock resource
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
 
             # Restoring connection
             lock.ping()
@@ -146,12 +146,12 @@ class TestLiveLock(unittest.TestCase):
 
             # Still cant lock at time after release_all_timeout passed
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
 
             # Still cant lock at time after release_all_timeout passed
             time.sleep(1)
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
 
             # First connection still has lock
             self.assertTrue(lock.locked())
@@ -161,12 +161,12 @@ class TestLiveLock(unittest.TestCase):
             self.connection._sock.close()
             time.sleep(release_all_timeout + 0.2)
 
-            id1 = LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2)
+            id1 = LiveLock(id='1', timeout=0, live_lock_connection=self.connection2)
             with id1 as lock2:
                 self.assertTrue(lock2.acquired)
 
                 with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                    LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection).__enter__()
+                    LiveLock(id='1', timeout=0, live_lock_connection=self.connection).__enter__()
                 with LiveLock(id='prefix2', live_lock_connection=self.connection2) as lock_prefix:
                     all_result = LiveLock.find('*')
                     self.assertEqual(len(all_result), 2)
@@ -179,7 +179,7 @@ class TestLiveLock(unittest.TestCase):
                 self.assertTrue(id1.canceled())
             # When lock does not exists, high level api returns True on cancelled()
             self.assertTrue(id1.canceled())
-            self.assertFalse(LiveLock(id='1', acquire_timeout=0, live_lock_connection=self.connection2).locked())
+            self.assertFalse(LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).locked())
 
         self.server.terminate()
 

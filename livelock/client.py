@@ -208,43 +208,56 @@ class LiveLockConnection(object):
 
 
 class LiveLock(object):
-    def __init__(self, id, acquire_timeout=10, live_lock_connection=None):
+    def __init__(self, id, blocking=True, timeout=-1, live_lock_connection=None):
         if live_lock_connection is None:
             live_lock_connection = _get_connection()
         self._connection = live_lock_connection
         self.id = id
         self.acquired = False
         self.retry_interval = 1
-        self.acquire_timeout = acquire_timeout
+        self.timeout = timeout
         self.reentrant = False
+        self.blocking = blocking
 
     @classmethod
     def find(cls, pattern):
         connection = _get_connection()
         data = connection.send_command('FIND', pattern)
         for row in data:
-            # decoding lock ID's
+            # decoding lock ID
             row[0] = row[0].decode()
         return data
 
-    def acquire(self, blocking=True):
+    def acquire(self, blocking=None):
+        if blocking is None:
+            blocking = self.blocking
+
         if blocking is True:
-            timeout = self.acquire_timeout
-            while timeout >= 0:
-                if self._acquire() is not True:
-                    timeout -= self.retry_interval
-                    if timeout > 0:
-                        time.sleep(self.retry_interval)
+            deadline = time.monotonic() + self.timeout
+            # In case of low or zero timeout
+            if self._acquire():
+                return True
+
+            while self.timeout < 0 or time.monotonic() < deadline:
+                sleep_time = deadline - time.monotonic()
+                if sleep_time < self.retry_interval:
+                    # seems last lock acquire try
+                    sleep_time = sleep_time / 2
                 else:
+                    sleep_time = self.retry_interval
+                time.sleep(sleep_time)
+
+                if self._acquire():
                     return True
+
             raise LiveLockClientTimeoutException('Timeout elapsed after %s seconds '
                                                  'while trying to acquire '
-                                                 'lock.' % self.acquire_timeout)
+                                                 'lock.' % self.timeout)
         else:
             return self._acquire()
 
     def __enter__(self):
-        self.acquired = self.acquire()
+        self.acquired = self.acquire(blocking=self.blocking)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -297,6 +310,7 @@ class LiveLock(object):
             if e.code == KEY_NOT_EXISTS:
                 return True
             raise e
+
 
 class LiveRLock(LiveLock):
     def __init__(self, *args, **kwargs):
