@@ -23,6 +23,9 @@ async def client(seconds):
     while True:
         lock_id = str(randint(111111111, 999999999))
         writer.write(b'AQ ' + lock_id.encode() + b'\r\n')
+        data = await reader.read(3000)
+        if data[0] != 43:
+            raise Exception('Error')
         writer.write(b'RELEASE ' + lock_id.encode() + b'\r\n')
         data = await reader.read(3000)
         if data[0] != 43:

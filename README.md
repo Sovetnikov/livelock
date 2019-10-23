@@ -25,8 +25,37 @@
 
 ## Быстрый старт
 ### Запуск из докера
+Пример Dockerfile в репозитории.
+
+Пример для docker-compose:
+```yaml
+  livelock:
+    build:
+      context: livelock
+    container_name: livelock
+    restart: always
+    environment:
+      SENTRY_DSN: 'https://dsn'
+      LIVELOCK_PASSWORD: 'password'
+```
 ### Клиент python
+```python
+import os
+import time
+
+from livelock.client import LiveLock
+
+# Есть интеграция с Django, можно задать эти настройки в settings.py
+os.environ['LIVELOCK_HOST'] = 'livelock.server.com'  # По умолчанию 127.0.0.1
+os.environ['LIVELOCK_PASSWORD'] = 'password'  # По умолчанию None
+
+with LiveLock('resource_id') as lock:
+    time.sleep(10)
+```
 ### Поддерживаемые версии python
+Сервер написан на Python 3.7 asyncio.
+
+Клиент поддерживает Python 3.4+
 
 ## Ограничения
 ### LiveLock не оптимизирован для
@@ -44,5 +73,11 @@
 ### Работа в случае обрыва связи до сервера
 Протокол сервера LiveLock поддерживает возможность восстановить блокировки клиентом в случае временного нарушения связи.
 Такая возможность есть как в случае когда только клиент знает о разрыве соединения, а сервер ещё считает соединение активным, так и в случае когда клиент и сервер знают о рызрыве соединения.
+
+## Производительность
+
+На Core i5-2300 получилось достичь 6 000 операций захвата + освобождения ресурсов на двух клиентских процессах по 60 соединений на каждый. 
+
+В перспективе сделать тест с Pypy.
 
 ## Описание протокола
