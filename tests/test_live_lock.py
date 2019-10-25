@@ -176,9 +176,9 @@ class TestLiveLock(unittest.TestCase):
                     self.assertTrue('prefix2' in [x[0] for x in pattern_result])
 
                 id1.cancel()
-                self.assertTrue(id1.canceled())
+                self.assertTrue(id1.cancelled())
             # When lock does not exists, high level api returns True on cancelled()
-            self.assertTrue(id1.canceled())
+            self.assertTrue(id1.cancelled())
             self.assertFalse(LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).locked())
 
         self.server.terminate()

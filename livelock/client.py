@@ -303,7 +303,7 @@ class LiveLock(object):
     def cancel(self):
         return self.signal('CANCEL')
 
-    def canceled(self):
+    def cancelled(self):
         try:
             return self.signal_exists('CANCEL')
         except LiveLockClientException as e:
