@@ -3,10 +3,12 @@ import logging
 import os
 import random
 import socket
+import sys
 import time
 import unittest
 from contextlib import contextmanager
 from multiprocessing import Process
+from os import _exit
 from threading import Thread
 
 from livelock.client import LiveLockConnection, LiveLock, LiveLockClientTimeoutException, LiveRLock, LiveLockClientException, configure
@@ -461,3 +463,47 @@ class TestLiveLock(unittest.TestCase):
         data = 'test'
         with LiveLock('kvstore_test') as aq:
             aq.set(data)
+
+    def test_client_fork(self):
+        if sys.platform == "win32":
+            # Skip test on win32
+            return
+        logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+
+        release_all_timeout = 5
+        port = self._start_server(release_all_timeout=release_all_timeout)
+
+        configure(port=port)
+
+        shared_lock_id = 'shared_lock'
+        child_lock_id = 'child_lock'
+        with LiveLock(id='fork_lock') as lock:
+            # Fork in locked state with initialized live lock connection client id
+            newpid = os.fork()
+            if newpid == 0:
+                with LiveLock(child_lock_id) as child_lock:
+                    # Child process
+                    for n in range(20):
+                        if LiveLock(shared_lock_id).locked():
+                            break
+                    else:
+                        _exit(1)
+
+                    for n in range(20):
+                        if LiveLock(shared_lock_id).release():
+                            break
+                        time.sleep(0.1)
+                    _exit(0)
+            else:
+                with LiveLock(shared_lock_id) as shared_lock:
+                    for n in range(20):
+                        if LiveLock(child_lock_id).locked():
+                            break
+                        time.sleep(0.1)
+                    else:
+                        self.fail('Child lock no acquired')
+
+                    for n in range(20):
+                        if not shared_lock.locked():
+                            self.fail('Shared lock released')
+                        time.sleep(0.1)

@@ -1,4 +1,5 @@
 import logging
+import os
 import socket
 import threading
 import time
@@ -56,18 +57,32 @@ class LiveLockConnection(object):
         self._max_payload = get_settings(max_payload, 'LIVELOCK_MAX_PAYLOAD', DEFAULT_MAX_PAYLOAD, django=True)
         self._sock = None
         self._buffer = None
-        self._client_id = client_id
+
         self._reconnect_timeout = 1
         self._reconnect_attempts = 3
+        
+        self.client_id = client_id
+        self._sock_pid = os.getpid()
+    
+    @property
+    def client_id(self):
+        if self._client_id_pid == os.getpid():
+            return self._client_id
+        return None
+
+    @client_id.setter
+    def client_id(self, client_id):
+        self._client_id = client_id
+        self._client_id_pid = os.getpid()
 
     def _close(self):
-        if self._sock:
+        if self._sock and self._sock_pid == os.getpid():
             self._sock.close()
         self._sock = None
         self._buffer = None
 
     def _connect(self):
-        if not self._sock:
+        if not self._sock or self._sock_pid != os.getpid():
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             x = sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
@@ -86,11 +101,12 @@ class LiveLockConnection(object):
                     time.sleep(self._reconnect_timeout)
 
             self._sock = sock
+            self._sock_pid = os.getpid()
             self._buffer = SocketBuffer(sock, 65536)
             self._send_connect()
 
     def _reconnect(self):
-        if self._sock:
+        if self._sock and self._sock_pid == os.getpid():
             self._sock.close()
         self._sock = None
         self._connect()
@@ -99,13 +115,13 @@ class LiveLockConnection(object):
         if self._password:
             resp = self.send_command('PASS', self._password, reconnect=False)
 
-        if self._client_id:
-            client_id = self.send_command('CONN', self._client_id)
-            if client_id != self._client_id:
-                raise Exception('client_id ({client_id}) != self._client_id ({self._client_id})'.format(**locals()))
+        if self.client_id:
+            client_id = self.send_command('CONN', self.client_id)
+            if client_id != self.client_id:
+                raise Exception('client_id ({client_id}) != self.client_id ({self.client_id})'.format(**locals()))
         else:
             client_id = self.send_command('CONN')
-            self._client_id = client_id
+            self.client_id = client_id
 
     def _read_int(self):
         line = self._buffer.readline()
