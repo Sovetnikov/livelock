@@ -517,13 +517,17 @@ class LiveLockProtocol(CommandProtocol):
         self.client_info = None
         self.shutdown_support = shutdown_support
         self._authorized = None
+        self.transport = None
         self.debug = get_settings(None, 'LIVELOCK_DEBUG', False)
 
         super().__init__(adaptor=adaptor, max_payload=max_payload, *args, **kwargs)
 
     @property
     def client_display(self):
-        peername = self.transport.get_extra_info('peername')
+        if self.transport:
+            peername = self.transport.get_extra_info('peername')
+        else:
+            peername = 'no_peer_address'
         return f'{peername} ({self.client_info}), client={self.client_id}'
 
     def connection_made(self, transport):
@@ -567,7 +571,7 @@ class LiveLockProtocol(CommandProtocol):
         peername = self.transport.get_extra_info('peername')
 
         verb = command.decode().lower()
-        logger.debug(f'Got command {command} from {self.client_info}' if verb != 'pass' else f'Got command PASS from {self.client_info}')
+        logger.debug(f'Got command {command} from {self.client_display}' if verb != 'pass' else f'Got command PASS from {self.client_display}')
 
         self.adaptor.on_command_start()
         try:
@@ -611,10 +615,10 @@ class LiveLockProtocol(CommandProtocol):
                     except:
                         self._reply(WRONG_ARGS)
                         return
-                    logger.debug(f'Got client info for {self.client_info} = {client_info}')
+                    logger.debug(f'Got client info for {self.client_display} = {client_info}')
                     if self.client_info:
                         if self.client_info != client_info:
-                            logger.warning(f'Client info changed for {self.client_info}')
+                            logger.warning(f'Client info changed for {self.client_display}')
                     self.client_info = client_info
                     self._reply(True)
                 elif verb in ('aq', 'aqr'):
@@ -695,7 +699,7 @@ class LiveLockProtocol(CommandProtocol):
                     result = list(self.adaptor.find(args[0].decode()))
                     self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
-                    logger.debug(f'SHUTDOWN invoked by {self.client_info}')
+                    logger.debug(f'SHUTDOWN invoked by {self.client_display}')
                     self.adaptor.terminate()
                     self._reply('1')
                 else:
