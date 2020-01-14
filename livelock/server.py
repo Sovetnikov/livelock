@@ -377,7 +377,7 @@ class InMemoryLockStorage(LockStorage):
             for client_id in self.client_to_locks.keys():
                 self.release_all(client_id, self.release_all_timeout + 1)
             if self.client_to_locks:
-                logger.debug(f'Market to free all locks after {self.release_all_timeout + 1} seconds')
+                logger.debug(f'Marked to free all locks after {self.release_all_timeout + 1} seconds')
 
     def clear_dump(self):
         if os.path.isfile(self._dump_file_name):
@@ -493,8 +493,9 @@ class CommandProtocol(asyncio.Protocol):
                 else:
                     command = c + await self._reader.readuntil(b'\r\n')
                     value = [x.strip().encode() for x in command.decode().split(' ')]
-            except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError):
+            except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError) as e:
                 # Connection is closed
+                self.receive_commands_end(e)
                 return
             await self.on_command_received(*value)
 
@@ -504,16 +505,26 @@ class CommandProtocol(asyncio.Protocol):
     def reply_terminating(self):
         raise NotImplemented()
 
+    def receive_commands_end(self, exc):
+        raise NotImplemented()
+
 
 class LiveLockProtocol(CommandProtocol):
     def __init__(self, adaptor, password, max_payload, shutdown_support=False, *args, **kwargs):
         self.password = password
         self.adaptor = adaptor
         self.client_id = None
+        self.client_info = None
         self.shutdown_support = shutdown_support
         self._authorized = None
+        self.debug = get_settings(None, 'LIVELOCK_DEBUG', False)
 
         super().__init__(adaptor=adaptor, max_payload=max_payload, *args, **kwargs)
+
+    @property
+    def client_display(self):
+        peername = self.transport.get_extra_info('peername')
+        return f'{peername} ({self.client_info}), client={self.client_id}'
 
     def connection_made(self, transport):
         if self.adaptor.kill_active:
@@ -523,11 +534,19 @@ class LiveLockProtocol(CommandProtocol):
         self.transport = transport
         super().connection_made(transport)
 
+    def receive_commands_end(self, exc):
+        logger.debug(f'Receive command loop ended for {self.client_display}, Exception={exc}')
+
+    def eof_received(self):
+        logger.debug(f'EOF received for {self.client_display}')
+        return super().eof_received()
+
     def connection_lost(self, exc):
-        if self.adaptor.kill_active:
-            return
         peername = self.transport.get_extra_info('peername')
-        logger.debug(f'Connection lost {peername} client={self.client_id}, Exception={exc}')
+        if self.adaptor.kill_active:
+            logger.debug(f'Connection lost on active kill {self.client_display} client={self.client_id}, Exception={exc}')
+            return
+        logger.debug(f'Connection lost {self.client_display}, Exception={exc}')
         if self.client_id:
             last_address = self.adaptor.get_client_last_address(self.client_id)
             if last_address and last_address == peername:
@@ -548,7 +567,7 @@ class LiveLockProtocol(CommandProtocol):
         peername = self.transport.get_extra_info('peername')
 
         verb = command.decode().lower()
-        logger.debug(f'Got command {command} from {peername}' if verb != 'pass' else f'Got command PASS from {peername}')
+        logger.debug(f'Got command {command} from {self.client_info}' if verb != 'pass' else f'Got command PASS from {self.client_info}')
 
         self.adaptor.on_command_start()
         try:
@@ -583,7 +602,22 @@ class LiveLockProtocol(CommandProtocol):
                 if not self.client_id:
                     self._reply(CONN_REQUIRED_ERROR)
                     return
-                if verb in ('aq', 'aqr'):
+                if verb == 'conninfo':
+                    if len(args) != 1 or not args[0]:
+                        self._reply(WRONG_ARGS)
+                        return
+                    try:
+                        client_info = args[0].decode()
+                    except:
+                        self._reply(WRONG_ARGS)
+                        return
+                    logger.debug(f'Got client info for {self.client_info} = {client_info}')
+                    if self.client_info:
+                        if self.client_info != client_info:
+                            logger.warning(f'Client info changed for {self.client_info}')
+                    self.client_info = client_info
+                    self._reply(True)
+                elif verb in ('aq', 'aqr'):
                     if len(args) != 1 or not args[0]:
                         self._reply(WRONG_ARGS)
                         return
@@ -661,10 +695,18 @@ class LiveLockProtocol(CommandProtocol):
                     result = list(self.adaptor.find(args[0].decode()))
                     self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
-                    logger.debug(f'SHUTDOWN invoked by {self.client_id} from {peername}')
+                    logger.debug(f'SHUTDOWN invoked by {self.client_info}')
                     self.adaptor.terminate()
                     self._reply('1')
                 else:
+                    if self.debug:
+                        if verb == 'dump':
+                            if hasattr(self.adaptor, 'dump'):
+                                self.adaptor.dump()
+                                self._reply('1')
+                            else:
+                                self._reply('0')
+                            return
                     self._reply(UNKNOWN_COMMAND_ERROR)
         finally:
             self.adaptor.on_command_end()

@@ -122,6 +122,7 @@ class LiveLockConnection(object):
         else:
             client_id = self.send_command('CONN')
             self.client_id = client_id
+        self.send_command('CONNINFO', '%s:%s' % (socket.gethostname(), os.getpid()))
 
     def _read_int(self):
         line = self._buffer.readline()
