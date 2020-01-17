@@ -83,11 +83,15 @@ class LiveLockConnection(object):
 
     def _connect(self):
         if not self._sock or self._sock_pid != os.getpid():
+            if not self._sock:
+                logger.debug('No socket, connecting')
+            if self._sock_pid and self._sock_pid != os.getpid():
+                logger.debug('Process PID changed, connecting')
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5.0)
             x = sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
             if (x == 0):
-                x = sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
             reconnect_attempts = self._reconnect_attempts
             while reconnect_attempts:
