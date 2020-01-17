@@ -81,7 +81,7 @@ class LiveLockConnection(object):
         self._sock = None
         self._buffer = None
 
-    def _connect(self):
+    def _connect(self, reconnect=True):
         if not self._sock or self._sock_pid != os.getpid():
             if not self._sock:
                 logger.info('No socket, connecting')
@@ -107,26 +107,27 @@ class LiveLockConnection(object):
             self._sock = sock
             self._sock_pid = os.getpid()
             self._buffer = SocketBuffer(sock, 65536)
-            self._send_connect()
+            self._send_connect(reconnect=reconnect)
 
     def _reconnect(self):
         if self._sock and self._sock_pid == os.getpid():
             self._sock.close()
         self._sock = None
-        self._connect()
+        # This proc called from connection loop, do not reconnect on inner commands fail
+        self._connect(reconnect=False)
 
-    def _send_connect(self):
+    def _send_connect(self, reconnect=True):
         if self._password:
             resp = self.send_command('PASS', self._password, reconnect=False)
 
         if self.client_id:
-            client_id = self.send_command('CONN', self.client_id)
+            client_id = self.send_command('CONN', self.client_id, reconnect=reconnect)
             if client_id != self.client_id:
                 raise Exception('client_id ({client_id}) != self.client_id ({self.client_id})'.format(**locals()))
         else:
-            client_id = self.send_command('CONN')
+            client_id = self.send_command('CONN', reconnect=reconnect)
             self.client_id = client_id
-        self.send_command('CONNINFO', '%s:%s' % (socket.gethostname(), os.getpid()))
+        self.send_command('CONNINFO', '%s:%s' % (socket.gethostname(), os.getpid()), reconnect=reconnect)
 
     def _read_int(self):
         line = self._buffer.readline()
