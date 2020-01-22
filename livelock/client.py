@@ -203,12 +203,18 @@ class LiveLockConnection(object):
         data = None
         send_success = None
         reconnect_attempts = self._reconnect_attempts
+
+        payload_len = len(payload)
+        if payload_len > self._max_payload + 1:
+            raise LiveLockClientException('Max command payload size exceeded {payload_len}b with limit of {self._max_payload}b'.format(**locals()))
+        reconnect_phase = False
+
         while reconnect_attempts:
             try:
+                if reconnect_phase:
+                    self._reconnect()
+                    reconnect_phase = False
                 # if connection lost on AQ command, lock can be acquired by server but we can lost success response from server
-                payload_len = len(payload)
-                if payload_len > self._max_payload + 1:
-                    raise LiveLockClientException('Max command payload size exceeded {payload_len}b with limit of {self._max_payload}b'.format(**locals()))
                 self._sock.sendall(payload)
                 send_success = True
                 data = self._read_response()
@@ -220,14 +226,13 @@ class LiveLockConnection(object):
                     raise e
                 logger.info('Got connection error, reconnecting')
                 # No sleep on first reconnect attempt
-                if reconnect_attempts != self._reconnect_attempts:
+                if reconnect_attempts != self._reconnect_attempts - 1:
                     time.sleep(self._reconnect_timeout)
-                if send_success:
+                # if send_success:
                     # FIXME: if AQ command sended but answer is not received make AQR on next try
-                    pass
+                    # pass
                 # Maybe check that locked resources still locked and relock if necessary (in case lock server restarted)
-                self._reconnect()
-
+                reconnect_phase = True
         return data
 
 
