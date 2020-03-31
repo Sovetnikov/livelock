@@ -1,7 +1,7 @@
 from setuptools import setup
 
 __title__ = 'livelock'
-__version__ = '0.6.7'
+__version__ = '0.6.8'
 __author__ = 'Artem Sovetnikov'
 
 setup(name='livelock',
@@ -20,4 +20,6 @@ setup(name='livelock',
           'Programming Language :: Python',
       ],
       include_package_data=True,
-      scripts=['livelock_server.py', ], )
+      scripts=['livelock_server.py', ],
+      install_requires=['prometheus-client==0.7.1']
+      )

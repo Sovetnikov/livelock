@@ -5,6 +5,7 @@ DEFAULT_RELEASE_ALL_TIMEOUT = 5
 DEFAULT_BIND_TO = '0.0.0.0'
 DEFAULT_MAX_PAYLOAD = 1024
 DEFAULT_SHUTDOWN_SUPPORT = False
+DEFAULT_PROMETHEUS_PORT = 8000
 
 def get_settings(value, key, default, django=False):
     if value:

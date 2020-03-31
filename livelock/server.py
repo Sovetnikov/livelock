@@ -9,7 +9,11 @@ from asyncio import StreamReader, IncompleteReadError
 from collections import defaultdict
 from fnmatch import fnmatch
 
-from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT
+from prometheus_client import start_http_server
+
+from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
+    DEFAULT_PROMETHEUS_PORT
+from livelock.stats import latency, max_lock_live_time
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
 logger = logging.getLogger(__name__)
@@ -563,6 +567,7 @@ class LiveLockProtocol(CommandProtocol):
     def kill_active(self):
         return self.adaptor.kill_active
 
+    @latency.time()
     async def on_command_received(self, command, *args):
         if self.kill_active:
             self.reply_terminating()
@@ -773,6 +778,18 @@ class StorageOperationGuard(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.parent.on_storage_operation_end()
 
+async def stats_collector(adaptor):
+    while True:
+        locks = list(adaptor.find('*'))
+        if not locks:
+            return 0
+        now = time.time()
+        first_lock = min(locks, key=lambda x: x[1])
+        max_live_lock = int(now - first_lock)
+
+        max_lock_live_time.set(max_live_lock)
+
+        await asyncio.sleep(5)
 
 async def live_lock_server(bind_to, port, release_all_timeout, password=None, max_payload=None, data_dir=None, shutdown_support=None):
     loop = asyncio.get_running_loop()
@@ -805,12 +822,28 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None, ma
             raise context['exception']
 
     loop.set_exception_handler(exception_handler)
+
+    stats_collector_task = loop.create_task(stats_collector(adaptor))
+
     async with server:
         await server.serve_forever()
+
+    stats_collector_task.cancel()
 
 
 def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password=None, max_payload=None, data_dir=None, shutdown_support=None):
     logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+    prometheus_port = get_settings(port, 'LIVELOCK_PROMETHEUS_PORT', DEFAULT_PROMETHEUS_PORT)
+    if prometheus_port:
+        try:
+            prometheus_port = int(prometheus_port)
+        except:
+            logger.critical(f'Wrong prometheus port {prometheus_port}')
+            prometheus_port = None
+    if prometheus_port:
+        logger.info(f'Starting prometheus metrics server at port {prometheus_port}')
+        start_http_server(prometheus_port)
+
     asyncio.run(live_lock_server(bind_to=get_settings(bind_to, DEFAULT_BIND_TO, 'LIVELOCK_BIND_TO'),
                                  port=get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT),
                                  release_all_timeout=get_settings(release_all_timeout, 'LIVELOCK_RELEASE_ALL_TIMEOUT', DEFAULT_RELEASE_ALL_TIMEOUT),
