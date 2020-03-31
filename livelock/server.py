@@ -780,15 +780,14 @@ class StorageOperationGuard(object):
 
 async def stats_collector(adaptor):
     while True:
+        max_live_lock = 0
         locks = list(adaptor.find('*'))
-        if not locks:
-            return 0
-        now = time.time()
-        first_lock = min(locks, key=lambda x: x[1])
-        max_live_lock = int(now - first_lock)
+        if locks:
+            now = time.time()
+            first_lock = min(locks, key=lambda x: x[1])
+            max_live_lock = int(now - first_lock[1])
 
         max_lock_live_time.set(max_live_lock)
-
         await asyncio.sleep(5)
 
 async def live_lock_server(bind_to, port, release_all_timeout, password=None, max_payload=None, data_dir=None, shutdown_support=None):
