@@ -238,14 +238,17 @@ class StorageAdaptor(LockStorage):
 
 class InMemoryLockStorage(LockStorage):
     def __init__(self, *args, **kwargs):
-        self.client_to_locks = defaultdict(list)
-        self.locks_to_client = dict()
-        self.all_locks = dict()
-        self.client_last_address = dict()
+        self._clean_all_data()
         self._dump_file_name = 'livelock_memstor_dump.pickle'
         self._write_disabled = False
 
         super().__init__(*args, **kwargs)
+
+    def _clean_all_data(self):
+        self.client_to_locks = defaultdict(list)
+        self.locks_to_client = dict()
+        self.all_locks = dict()
+        self.client_last_address = dict()
 
     def _delete_lock(self, lock_id):
         client_id = self.locks_to_client.pop(lock_id)
@@ -365,23 +368,27 @@ class InMemoryLockStorage(LockStorage):
 
     def load_dump(self):
         if os.path.isfile(self._dump_file_name):
-            logger.debug('Loading in memory lock data from %s' % os.path.abspath(self._dump_file_name))
-            with open(self._dump_file_name, mode='rb') as f:
-                data = pickle.load(f)
-            if data is None:
-                raise Exception('No data in dump')
-            self.client_to_locks = data['client_to_locks']
-            self.locks_to_client = data['locks_to_client']
-            self.all_locks = data['all_locks']
-            self.client_last_address = data['client_last_address']
+            try:
+                logger.debug('Loading in memory lock data from %s' % os.path.abspath(self._dump_file_name))
+                with open(self._dump_file_name, mode='rb') as f:
+                    data = pickle.load(f)
+                if data is None:
+                    raise Exception('No data in dump')
+                self.client_to_locks = data['client_to_locks']
+                self.locks_to_client = data['locks_to_client']
+                self.all_locks = data['all_locks']
+                self.client_last_address = data['client_last_address']
 
-            # Delete expired locks
-            self._maintenance()
+                # Delete expired locks
+                self._maintenance()
 
-            for client_id in self.client_to_locks.keys():
-                self.release_all(client_id, self.release_all_timeout + 1)
-            if self.client_to_locks:
-                logger.debug(f'Marked to free all locks after {self.release_all_timeout + 1} seconds')
+                for client_id in self.client_to_locks.keys():
+                    self.release_all(client_id, self.release_all_timeout + 1)
+                if self.client_to_locks:
+                    logger.debug(f'Marked to free all locks after {self.release_all_timeout + 1} seconds')
+            except Exception as e:
+                self._clean_all_data()
+                logger.error(f'Error reading dump file {self._dump_file_name}', exc_info=True)
 
     def clear_dump(self):
         if os.path.isfile(self._dump_file_name):
