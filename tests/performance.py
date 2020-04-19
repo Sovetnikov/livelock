@@ -44,7 +44,7 @@ def f(seconds):
 
 
 processes = 2
-tasks_per_process = 60
+tasks_per_process = 10
 seconds_to_test = 10
 
 if __name__ == '__main__':
