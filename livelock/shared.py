@@ -6,12 +6,16 @@ DEFAULT_BIND_TO = '0.0.0.0'
 DEFAULT_MAX_PAYLOAD = 1024
 DEFAULT_SHUTDOWN_SUPPORT = False
 DEFAULT_PROMETHEUS_PORT = 8000
+DEFAULT_TCP_KEEPALIVE_TIME = 60  # seconds
+DEFAULT_TCP_KEEPALIVE_INTERVAL = 10  # seconds
+DEFAULT_TCP_KEEPALIVE_PROBES = 10
+DEFAULT_LOGLEVEL = 'INFO'
 
-def get_settings(value, key, default, django=False):
-    if value:
+def get_settings(value, key, default):
+    if value is not None:
         return value
     value = os.getenv(key, None)
-    if not value:
+    if value is None:
         try:
             from django.core.exceptions import ImproperlyConfigured
             try:
@@ -21,7 +25,7 @@ def get_settings(value, key, default, django=False):
                 pass
         except ImportError:
             pass
-    if not value:
+    if value is None:
         value = default
     return value
 

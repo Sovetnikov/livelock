@@ -9,11 +9,10 @@ from asyncio import StreamReader, IncompleteReadError
 from collections import defaultdict
 from fnmatch import fnmatch
 
-from prometheus_client import start_http_server
-
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
-    DEFAULT_PROMETHEUS_PORT
+    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL
 from livelock.stats import latency, max_lock_live_time
+from livelock.tcp_opts import set_tcp_keepalive
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
 logger = logging.getLogger(__name__)
@@ -400,12 +399,37 @@ class InMemoryLockStorage(LockStorage):
 
 
 class CommandProtocol(asyncio.Protocol):
-    def __init__(self, adaptor, max_payload, *args, **kwargs):
+    def __init__(self, tcp_keepalive_time=None, tcp_keepalive_interval=None, tcp_keepalive_probes=None, *args, **kwargs):
         self.transport = None
-        self.max_payload = max_payload
         self._reader = None
 
-        super().__init__()
+        """
+        http://coryklein.com/tcp/2015/11/25/custom-configuration-of-tcp-socket-keep-alive-timeouts.html
+        Keep-Alive Process
+        There are three configurable properties that determine how Keep-Alives work. On Linux they are1:
+        
+        tcp_keepalive_time
+        default 7200 seconds
+        tcp_keepalive_probes
+        default 9
+        tcp_keepalive_intvl
+        default 75 seconds
+        The process works like this:
+        
+        1. Client opens TCP connection
+        2. If the connection is silent for tcp_keepalive_time seconds, send a single empty ACK packet.1
+        3. Did the server respond with a corresponding ACK of its own?
+            - No
+            1. Wait tcp_keepalive_intvl seconds, then send another ACK
+            2. Repeat until the number of ACK probes that have been sent equals tcp_keepalive_probes.
+            3. If no response has been received at this point, send a RST and terminate the connection.
+            - Yes: Return to step 2
+        """
+        self.tcp_keepalive_time = int(tcp_keepalive_time)
+        self.tcp_keepalive_interval = int(tcp_keepalive_interval)
+        self.tcp_keepalive_probes = int(tcp_keepalive_probes)
+
+        super().__init__(*args, **kwargs)
 
     def data_received(self, data):
         if self.kill_active:
@@ -415,6 +439,14 @@ class CommandProtocol(asyncio.Protocol):
     def connection_made(self, transport):
         if self.kill_active:
             return
+
+        sock = transport.get_extra_info('socket')
+        set_tcp_keepalive(sock, opts=dict(tcp_keepalive=True,
+                                          tcp_keepalive_idle=self.tcp_keepalive_time,
+                                          tcp_keepalive_intvl=self.tcp_keepalive_interval,
+                                          tcp_keepalive_cnt=self.tcp_keepalive_probes,
+                                          ))
+
         self.transport = transport
         self._reader = StreamReader()
         self._reader.set_transport(transport)
@@ -524,14 +556,17 @@ class LiveLockProtocol(CommandProtocol):
     def __init__(self, adaptor, password, max_payload, shutdown_support=False, *args, **kwargs):
         self.password = password
         self.adaptor = adaptor
+        self.max_payload = max_payload
+
         self.client_id = None
         self.client_info = None
         self.shutdown_support = shutdown_support
         self._authorized = None
         self.transport = None
+
         self.debug = get_settings(None, 'LIVELOCK_DEBUG', False)
 
-        super().__init__(adaptor=adaptor, max_payload=max_payload, *args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     @property
     def client_display(self):
@@ -785,6 +820,7 @@ class StorageOperationGuard(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.parent.on_storage_operation_end()
 
+
 async def stats_collector(adaptor):
     while True:
         max_live_lock = 0
@@ -797,7 +833,20 @@ async def stats_collector(adaptor):
         max_lock_live_time.set(max_live_lock)
         await asyncio.sleep(5)
 
-async def live_lock_server(bind_to, port, release_all_timeout, password=None, max_payload=None, data_dir=None, shutdown_support=None):
+
+async def live_lock_server(bind_to, port, release_all_timeout, password=None,
+                           max_payload=None,
+                           data_dir=None,
+                           shutdown_support=None,
+                           tcp_keepalive_time=None,
+                           tcp_keepalive_interval=None,
+                           tcp_keepalive_probes=None,
+                           ):
+    # Sanitize values
+    tcp_keepalive_time = int(tcp_keepalive_time) if tcp_keepalive_time else None
+    tcp_keepalive_interval = int(tcp_keepalive_interval) if tcp_keepalive_interval else None
+    tcp_keepalive_probes = int(tcp_keepalive_probes) if tcp_keepalive_probes else None
+
     loop = asyncio.get_running_loop()
 
     try:
@@ -822,7 +871,15 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None, ma
 
     adaptor = StorageAdaptor(storage)
 
-    server = await loop.create_server(lambda: LiveLockProtocol(adaptor=adaptor, password=password, max_payload=max_payload, shutdown_support=shutdown_support), bind_to, port)
+    server = await loop.create_server(lambda: LiveLockProtocol(adaptor=adaptor,
+                                                               password=password,
+                                                               max_payload=max_payload,
+                                                               shutdown_support=shutdown_support,
+                                                               tcp_keepalive_time=tcp_keepalive_time,
+                                                               tcp_keepalive_interval=tcp_keepalive_interval,
+                                                               tcp_keepalive_probes=tcp_keepalive_probes,
+                                                               ), bind_to, port)
+
     def exception_handler(loop, context):
         if not isinstance(context['exception'], SystemExit):
             raise context['exception']
@@ -837,8 +894,19 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None, ma
     stats_collector_task.cancel()
 
 
-def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password=None, max_payload=None, data_dir=None, shutdown_support=None):
-    logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password=None,
+          max_payload=None,
+          data_dir=None,
+          shutdown_support=None,
+          tcp_keepalive_time=None,
+          tcp_keepalive_interval=None,
+          tcp_keepalive_probes=None,
+          ):
+
+    env_loglevel = get_settings(None, 'LIVELOCK_LOGLEVEL', DEFAULT_LOGLEVEL)
+    loglevel = getattr(logging, env_loglevel.upper())
+
+    logging.basicConfig(level=loglevel, format='%(name)s:[%(levelname)s]: %(message)s')
     prometheus_port = get_settings(port, 'LIVELOCK_PROMETHEUS_PORT', DEFAULT_PROMETHEUS_PORT)
     if prometheus_port:
         try:
@@ -847,8 +915,14 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
             logger.critical(f'Wrong prometheus port {prometheus_port}')
             prometheus_port = None
     if prometheus_port:
-        logger.info(f'Starting prometheus metrics server at port {prometheus_port}')
-        start_http_server(prometheus_port)
+        try:
+            from prometheus_client import start_http_server
+        except ImportError:
+            logger.info(f'prometheus_client is not available')
+            prometheus_port = None
+        if prometheus_port:
+            logger.info(f'Starting prometheus metrics server at port {prometheus_port}')
+            start_http_server(prometheus_port)
 
     asyncio.run(live_lock_server(bind_to=get_settings(bind_to, DEFAULT_BIND_TO, 'LIVELOCK_BIND_TO'),
                                  port=get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT),
@@ -857,4 +931,7 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
                                  max_payload=get_settings(max_payload, 'LIVELOCK_MAX_PAYLOAD', DEFAULT_MAX_PAYLOAD),
                                  data_dir=get_settings(data_dir, 'LIVELOCK_DATA_DIR', None),
                                  shutdown_support=get_settings(shutdown_support, 'LIVELOCK_SHUTDOWN_SUPPORT', DEFAULT_SHUTDOWN_SUPPORT),
+                                 tcp_keepalive_time=get_settings(tcp_keepalive_time, 'LIVELOCK_TCP_KEEPALIVE_TIME', DEFAULT_TCP_KEEPALIVE_TIME),
+                                 tcp_keepalive_interval=get_settings(tcp_keepalive_interval, 'LIVELOCK_TCP_KEEPALIVE_INTERVAL', DEFAULT_TCP_KEEPALIVE_INTERVAL),
+                                 tcp_keepalive_probes=get_settings(tcp_keepalive_probes, 'LIVELOCK_TCP_KEEPALIVE_PROBES', DEFAULT_TCP_KEEPALIVE_PROBES),
                                  ))

@@ -42,10 +42,10 @@ class LiveLockClientTimeoutException(LiveLockClientException):
 
 class LiveLockConnection(object):
     def __init__(self, host=None, port=None, client_id=None, password=None, max_payload=None):
-        self.host = get_settings(host, 'LIVELOCK_HOST', '127.0.0.1', django=True)
+        self.host = get_settings(host, 'LIVELOCK_HOST', '127.0.0.1')
 
         from livelock.shared import DEFAULT_LIVELOCK_SERVER_PORT
-        port = get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT, django=True)
+        port = get_settings(port, 'LIVELOCK_PORT', DEFAULT_LIVELOCK_SERVER_PORT)
         try:
             port = int(port)
         except:
@@ -53,8 +53,8 @@ class LiveLockConnection(object):
 
         self.port = port
 
-        self._password = get_settings(password, 'LIVELOCK_PASSWORD', None, django=True)
-        self._max_payload = get_settings(max_payload, 'LIVELOCK_MAX_PAYLOAD', DEFAULT_MAX_PAYLOAD, django=True)
+        self._password = get_settings(password, 'LIVELOCK_PASSWORD', None)
+        self._max_payload = get_settings(max_payload, 'LIVELOCK_MAX_PAYLOAD', DEFAULT_MAX_PAYLOAD)
         self._sock = None
         self._buffer = None
 
