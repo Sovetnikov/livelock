@@ -11,7 +11,7 @@ setup(name='livelock',
       author=__author__,
       author_email='asovetnikov@gmail.com',
       packages=['livelock', ],
-      platforms=('Any',),
+      platforms=['Any',],
       entry_points={},
       classifiers=[
           'Development Status :: 4 - Beta',

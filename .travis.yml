@@ -32,7 +32,8 @@ deploy:
 #  server: https://test.pypi.org/legacy/
 #  password: $PYPI_TEST_TOKEN
 after_success:
+  - export VERSION=`python setup.py --version`
   - echo "$DOCKER_PASSWORD" | docker login -u "sovetnikov" --password-stdin
-  - docker build -t sovetnikov/livelock:latest -t sovetnikov/livelock::$TRAVIS_BUILD_NUMBER .
+  - docker build -t sovetnikov/livelock:latest -t sovetnikov/livelock:$VERSION .
   - docker push sovetnikov/livelock:latest
-  - docker push sovetnikov/livelock::$TRAVIS_BUILD_NUMBER
+  - docker push sovetnikov/livelock:$VERSION
