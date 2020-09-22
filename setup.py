@@ -21,5 +21,5 @@ setup(name='livelock',
       ],
       include_package_data=True,
       scripts=['livelock_server.py', ],
-      install_requires=['prometheus-client==0.7.1']
+      install_requires=[]
       )

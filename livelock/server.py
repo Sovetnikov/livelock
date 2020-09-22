@@ -11,7 +11,7 @@ from fnmatch import fnmatch
 
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
     DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL
-from livelock.stats import latency, max_lock_live_time
+from livelock.stats import latency, max_lock_live_time, prometheus_client_installed
 from livelock.tcp_opts import set_tcp_keepalive
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
@@ -918,7 +918,7 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
         try:
             from prometheus_client import start_http_server
         except ImportError:
-            logger.info(f'prometheus_client is not available')
+            logger.info('Prometheus port is set but prometheus_client not installed (pip install prometheus-client)')
             prometheus_port = None
         if prometheus_port:
             logger.info(f'Starting prometheus metrics server at port {prometheus_port}')
