@@ -164,8 +164,8 @@ class StorageAdaptor(LockStorage):
             # Good time to dump and exit(), but there is chance that some client's will not get their responses
             self.dump_before_die()
 
-        # In case storage operations in progress we will dump data after last operations completes
-        # and will exit() when last reply is send
+        # In case any storage operations is in progress, we will dump data after last operations completes
+        # and will exit() when last reply is sent
         if not self._commands_in_process:
             self.die()
 

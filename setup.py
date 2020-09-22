@@ -14,7 +14,7 @@ setup(name='livelock',
       platforms=('Any',),
       entry_points={},
       classifiers=[
-          'Development Status :: 2 - Pre-Alpha',
+          'Development Status :: 4 - Beta',
           'Intended Audience :: Developers',
           'Operating System :: OS Independent',
           'Programming Language :: Python',
