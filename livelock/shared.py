@@ -30,9 +30,18 @@ def get_settings(value, key, default):
         value = default
     return value
 
-
 def _pack_bytes(value):
+    return b''.join((b'^', str(len(value)).encode(), b'\r\n', value, b'\r\n'))
+
+
+def _pack_blob_str(value):
+    value = value.encode()
     return b''.join((b'$', str(len(value)).encode(), b'\r\n', value, b'\r\n'))
+
+
+def _pack_str(value):
+    value = value.encode()
+    return b''.join((b'+', value, b'\r\n', value, b'\r\n'))
 
 
 def _pack_null():
@@ -54,19 +63,41 @@ def _pack_array(value):
     return b''.join(r)
 
 
+def _pack_dict(value):
+    r = []
+    for k, v in value.items():
+        if type(k) not in (tuple, list, int, float, str):
+            raise Exception('Dict keys of type %s not supported' % type(k))
+        r.append(pack_resp(k))
+        r.append(pack_resp(v))
+    l = len(value)
+    r.insert(0, b''.join((b'%', str(l).encode(), b'\r\n')))
+    return b''.join(r)
+
+
+def _pack_bool(value):
+    if value:
+        return b'#t\r\n'
+    return b'#f\r\n'
+
+
 def pack_resp(data):
     if data is None:
         return _pack_null()
     t = type(data)
     if t == str:
-        return _pack_bytes(data.encode())
-    elif t == bytes:
-        return _pack_bytes(data)
+        return _pack_blob_str(data)
     elif t == int:
         return _pack_int(data)
     elif t in (list, tuple):
         return _pack_array(data)
+    elif t == dict:
+        return _pack_dict(data)
     elif t == float:
         return _pack_float(data)
+    elif t == bool:
+        return _pack_bool(data)
+    elif t == bytes:
+        return _pack_bytes(data)
     else:
         raise Exception('Unsupported type %s' % str(t))

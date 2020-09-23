@@ -26,7 +26,7 @@ def _get_connection():
         configure()
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
     if not existing_connection:
-        raise LiveLockClientException('Cant create connection')
+        raise LiveLockClientException('Cannot create connection')
     return existing_connection
 
 
@@ -133,12 +133,23 @@ class LiveLockConnection(object):
         line = self._buffer.readline()
         return int(line.decode().strip())
 
+    def _read_bool(self):
+        line = self._buffer.readline()
+        line = line.decode()
+        if line == 't':
+            return True
+        if line == 'f':
+            return False
+        raise Exception('Unknown bool code: ' + line)
+
     def _read_float(self):
         line = self._buffer.readline()
         return float(line.decode().strip())
 
     def _read_bytes(self):
         len = self._read_int()
+        if len < 0:
+            return None
         line = self._buffer.read(max(2, len + 2))
         if line[-1] != ord(b'\n'):
             raise Exception(r"line[-1] != ord(b'\n')")
@@ -147,6 +158,25 @@ class LiveLockConnection(object):
         if len == 0:
             return b''
         return line[:-2]
+
+    def _read_blob_str(self):
+        data = self._read_bytes()
+        if data is None:
+            return None
+        return data.decode()
+
+    def _read_dict(self):
+        len = self._read_int()
+        r = dict()
+        while len:
+            c = self._buffer.read(1)
+            key = self._receive_resp(c)
+
+            c = self._buffer.read(1)
+            value = self._receive_resp(c)
+            r[key] = value
+            len -= 1
+        return r
 
     def _read_array(self):
         len = self._read_int()
@@ -161,18 +191,25 @@ class LiveLockConnection(object):
     def _receive_resp(self, c):
         if c == b':':
             return self._read_int()
-        elif c == b'$':
+        elif c == b'^':
             return self._read_bytes()
         elif c == b'*':
             return self._read_array()
+        elif c == b'$':
+            return self._read_blob_str()
+        elif c == b'%':
+            return self._read_dict()
+        elif c == b'#':
+            return self._read_bool()
         elif c == b',':
             return self._read_float()
         else:
             raise Exception('Unknown RESP start char %s' % c)
 
+
     def _read_response(self):
         c = self._buffer.read(1)
-        if c in b':*$,':
+        if c in b':*$,^#,%':
             value = self._receive_resp(c)
             return value
         elif c == b'+':
@@ -237,7 +274,7 @@ class LiveLockConnection(object):
 
 
 class LiveLock(object):
-    def __init__(self, id, blocking=True, timeout=60*5, live_lock_connection=None):
+    def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
         if live_lock_connection is None:
             live_lock_connection = _get_connection()
         self._connection = live_lock_connection
@@ -252,9 +289,6 @@ class LiveLock(object):
     def find(cls, pattern):
         connection = _get_connection()
         data = connection.send_command('FIND', pattern)
-        for row in data:
-            # decoding lock ID
-            row[0] = row[0].decode()
         return data
 
     @classmethod
@@ -264,7 +298,7 @@ class LiveLock(object):
         return resp == '1'
 
     def acquire(self, blocking=None):
-        if self.timeout <= 0:
+        if self.timeout < 0:
             raise Exception('Acquire timeout must be positive')
         if blocking is None:
             blocking = self.blocking
@@ -275,15 +309,19 @@ class LiveLock(object):
             if self._acquire():
                 return True
 
-            while time.monotonic() < deadline:
-                sleep_time = deadline - time.monotonic()
-                if sleep_time < 0:
-                    sleep_time = 0
-                if sleep_time < self.retry_interval:
-                    # seems last lock acquire try
-                    sleep_time = sleep_time / 2
-                else:
+            while self.timeout <= 0 or time.monotonic() < deadline:
+                if self.timeout <= 0:
                     sleep_time = self.retry_interval
+                else:
+                    sleep_time = deadline - time.monotonic()
+                    if sleep_time <= 0:
+                        sleep_time = 0
+
+                    if sleep_time < self.retry_interval:
+                        # seems last try
+                        sleep_time = sleep_time / 2
+                    else:
+                        sleep_time = self.retry_interval
                 time.sleep(sleep_time)
 
                 if self._acquire():

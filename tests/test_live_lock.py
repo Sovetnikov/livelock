@@ -128,32 +128,32 @@ class TestLiveLock(unittest.TestCase):
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
                 reentrant_lock = LiveRLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
-            # Breaking connection
+            # Closing connection
             self.connection._sock.close()
 
-            # Check that after connection lost aonther client is still cant lock resource
+            # Check that after connection lost another client is still cannot lock resource
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
                 LiveLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
-            time.sleep(release_all_timeout - 3)
+            time.sleep(release_all_timeout - 4)
 
-            # Check that after connection lost another client is still cant lock resource
+            # Check that after connection lost another client is still cannot lock resource
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=1, live_lock_connection=self.connection2).__enter__()
 
-            # Restoring connection
+            # Restore connection
             lock.ping()
 
             time.sleep(2)
 
             # Still cant lock at time after release_all_timeout passed
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
             # Still cant lock at time after release_all_timeout passed
             time.sleep(1)
             with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                LiveLock(id='1', timeout=0, live_lock_connection=self.connection2).__enter__()
+                LiveLock(id='1', timeout=2, live_lock_connection=self.connection2).__enter__()
 
             # First connection still has lock
             self.assertTrue(lock.locked())
@@ -168,7 +168,7 @@ class TestLiveLock(unittest.TestCase):
                 self.assertTrue(lock2.acquired)
 
                 with self.assertRaises(LiveLockClientTimeoutException) as exc:
-                    LiveLock(id='1', timeout=0, live_lock_connection=self.connection).__enter__()
+                    LiveLock(id='1', timeout=2, live_lock_connection=self.connection).__enter__()
                 with LiveLock(id='prefix2', live_lock_connection=self.connection2) as lock_prefix:
                     all_result = LiveLock.find('*')
                     self.assertEqual(len(all_result), 2)
@@ -243,7 +243,7 @@ class TestLiveLock(unittest.TestCase):
 
         resp1 = command1('FIND *')
         self.assertTrue(resp1, resp1)
-        self.assertEqual(resp1[0][0], b'1')
+        self.assertEqual(resp1[0][0], '1')
         self.assertTrue(isinstance(resp1[0][1], float))
         self.assertEqual(len(resp1[0]), 2)
         self.assertEqual(len(resp1), 1)
@@ -399,13 +399,13 @@ class TestLiveLock(unittest.TestCase):
         resp2 = command2('FIND prefix*')
         self.assertTrue(resp2, list)
         self.assertEqual(len(resp2), 1)
-        self.assertTrue(b'prefix2' in [x[0] for x in resp2])
+        self.assertTrue('prefix2' in [x[0] for x in resp2])
         self.assertAlmostEqual([int(x[1] / 10) for x in resp2][0], int(time.time() / 10), 1)
 
         resp = self.connection_dupe.send_command('RELEASE', '1')
         self.assertEqual(resp, '1')
 
-        # Random connection resets and connection blocking
+        # Random connection reset and connection blocking
         with self.disable_network():
             self.kill_thread = Thread(target=self.kill_connection_worker, daemon=True)
             self.kill_thread.start()
@@ -436,7 +436,7 @@ class TestLiveLock(unittest.TestCase):
         if self.server:
             self.server.terminate()
 
-    def _start_server(self, release_all_timeout, password=None, port=None, debug=False, shutdown_support=False, log_level=None, disable_dump_load=None):
+    def _start_server(self, release_all_timeout, password=None, port=None, debug=False, shutdown_support=False, log_level=None, disable_dump_load=True):
         if not port:
             port = random.randint(DEFAULT_LIVELOCK_SERVER_PORT + 1, DEFAULT_LIVELOCK_SERVER_PORT + 4)
         os.environ['LIVELOCK_PORT'] = str(port)
@@ -521,8 +521,7 @@ class TestLiveLock(unittest.TestCase):
                         time.sleep(0.1)
 
     def test_bad_dump(self):
-        print(f'Self pid {os.getpid()}')
-        logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+        #logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
         release_all_timeout = 5
         port = self._start_server(release_all_timeout=release_all_timeout, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=True)
         os.environ['LIVELOCK_PORT'] = str(port)
@@ -532,6 +531,7 @@ class TestLiveLock(unittest.TestCase):
         self.assertFalse(client.locked())
         self.assertTrue(client.acquire())
         stats = client._connection.send_command('STATS')
+        dump_file_path = stats['dump_file_path']
         # Shutting down server, existing locks must be dumped to disk
         client._connection.send_command('SHUTDOWN')
         for n in range(4):
@@ -546,11 +546,33 @@ class TestLiveLock(unittest.TestCase):
 
         with self.assertRaises(ConnectionError):
             client.release(reconnect=False)
+        # Resetting connection and out client id
+        configure(port=port)
         del client
 
         # Starting new server, dumped locks must be loaded from disk and exists on server
-        port = self._start_server(release_all_timeout=release_all_timeout, port=port, debug=True, log_level='DEBUG')
-        client2 = LiveLock(id='2')
-        self.assertTrue(client2.is_locked('1'))
-        time.sleep(release_all_timeout)
-        self.assertFalse(client2.is_locked('1'))
+        port = self._start_server(release_all_timeout=release_all_timeout, port=port, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=False)
+        client = LiveLock(id='2')
+        self.assertTrue(client.is_locked('1'))
+        time.sleep(release_all_timeout+1)
+        # Lock must be free after timeout
+        self.assertFalse(client.is_locked('1'))
+        self.assertTrue(client.acquire())
+
+        # Now dumping locks again and ruining dump file
+        client._connection.send_command('SHUTDOWN')
+        for n in range(4):
+            if not is_port_open('127.0.0.1', port):
+                break
+            time.sleep(1)
+        self.assertFalse(is_port_open('127.0.0.1', port))
+        configure(port=port)
+
+        self.assertTrue(os.path.exists(dump_file_path))
+        with open(dump_file_path, mode='wb+') as f:
+            f.write(b'0')
+
+        # Starting server with allowed dump loading
+        port = self._start_server(release_all_timeout=release_all_timeout, port=port, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=False)
+        client = LiveLock(id='3')
+        self.assertFalse(client.is_locked('2'))

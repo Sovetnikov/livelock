@@ -393,11 +393,11 @@ class InMemoryLockStorage(LockStorage):
 
     def clear_dump(self):
         if os.path.isfile(self._dump_file_name):
-            logger.debug('Removing in memory lock data file %s' % ABSOLUTE_PATH(self._dump_file_name))
+            logger.debug('Removing in memory lock data file %s' % os.path.abspath(self._dump_file_name))
             os.remove(self._dump_file_name)
 
     def stats(self):
-        return dict(lock_count=len(self.all_locks), dump_file=ABSOLUTE_PATH(self._dump_file_name))
+        return dict(lock_count=len(self.all_locks), dump_file_path=os.path.abspath(self._dump_file_name))
 
 
 class CommandProtocol(asyncio.Protocol):
@@ -751,7 +751,7 @@ class LiveLockProtocol(CommandProtocol):
                     if len(args):
                         self._reply(WRONG_ARGS)
                         return
-                    result = list(self.adaptor.stats().items())
+                    result = self.adaptor.stats()
                     self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
                     logger.debug(f'SHUTDOWN invoked by {self.client_display}')
