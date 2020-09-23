@@ -436,17 +436,29 @@ class TestLiveLock(unittest.TestCase):
         if self.server:
             self.server.terminate()
 
-    def _start_server(self, release_all_timeout, password=None, port=None):
+    def _start_server(self, release_all_timeout, password=None, port=None, debug=False, shutdown_support=False, log_level=None, disable_dump_load=None):
         if not port:
             port = random.randint(DEFAULT_LIVELOCK_SERVER_PORT + 1, DEFAULT_LIVELOCK_SERVER_PORT + 4)
         os.environ['LIVELOCK_PORT'] = str(port)
         if password:
             os.environ['LIVELOCK_PASSWORD'] = password
 
+        if disable_dump_load:
+            os.environ['LIVELOCK_DISABLE_DUMP_LOAD'] = '1'
+        if debug:
+            os.environ['LIVELOCK_DEBUG'] = '1'
+        if shutdown_support:
+            os.environ['LIVELOCK_SHUTDOWN_SUPPORT'] = '1'
+        if log_level:
+            os.environ['LIVELOCK_LOGLEVEL'] = log_level
         from livelock.server import start
         self.server = Process(target=start, kwargs=dict(release_all_timeout=release_all_timeout))
         self.server.start()
 
+        os.environ.pop('LIVELOCK_DISABLE_DUMP_LOAD', None)
+        os.environ.pop('LIVELOCK_LOGLEVEL', None)
+        os.environ.pop('LIVELOCK_DEBUG', None)
+        os.environ.pop('LIVELOCK_SHUTDOWN_SUPPORT', None)
         os.environ.pop('LIVELOCK_PORT')
         if password:
             os.environ.pop('LIVELOCK_PASSWORD')
@@ -507,3 +519,38 @@ class TestLiveLock(unittest.TestCase):
                         if not shared_lock.locked():
                             self.fail('Shared lock released')
                         time.sleep(0.1)
+
+    def test_bad_dump(self):
+        print(f'Self pid {os.getpid()}')
+        logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+        release_all_timeout = 5
+        port = self._start_server(release_all_timeout=release_all_timeout, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=True)
+        os.environ['LIVELOCK_PORT'] = str(port)
+        configure(port=port)
+
+        client = LiveLock(id='1')
+        self.assertFalse(client.locked())
+        self.assertTrue(client.acquire())
+        stats = client._connection.send_command('STATS')
+        # Shutting down server, existing locks must be dumped to disk
+        client._connection.send_command('SHUTDOWN')
+        for n in range(4):
+            if not is_port_open('127.0.0.1', port):
+                break
+            time.sleep(1)
+        self.assertFalse(is_port_open('127.0.0.1', port))
+
+        # Тут надо обработать ещё одну ситуацию
+        # если клиент сообщил что отпустил блокировку, но сервер не получил уведомление об этом
+        # то при восстановлении соединения сервер будет считать блокировку живой, а на самом деле она будет снята и она зависнет
+
+        with self.assertRaises(ConnectionError):
+            client.release(reconnect=False)
+        del client
+
+        # Starting new server, dumped locks must be loaded from disk and exists on server
+        port = self._start_server(release_all_timeout=release_all_timeout, port=port, debug=True, log_level='DEBUG')
+        client2 = LiveLock(id='2')
+        self.assertTrue(client2.is_locked('1'))
+        time.sleep(release_all_timeout)
+        self.assertFalse(client2.is_locked('1'))

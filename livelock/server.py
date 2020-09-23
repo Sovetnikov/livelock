@@ -10,8 +10,8 @@ from collections import defaultdict
 from fnmatch import fnmatch
 
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
-    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL
-from livelock.stats import latency, max_lock_live_time, prometheus_client_installed
+    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD
+from livelock.stats import latency, max_lock_live_time
 from livelock.tcp_opts import set_tcp_keepalive
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
@@ -234,6 +234,8 @@ class StorageAdaptor(LockStorage):
     def clear_dump(self):
         return self.store.clear_dump()
 
+    def stats(self):
+        return self.store.stats()
 
 class InMemoryLockStorage(LockStorage):
     def __init__(self, *args, **kwargs):
@@ -291,7 +293,7 @@ class InMemoryLockStorage(LockStorage):
         return True
 
     def release_all(self, client_id, timeout=None):
-        mark_free_at = time.time() + self.release_all_timeout if not timeout else timeout
+        mark_free_at = time.time() + (self.release_all_timeout if not timeout else timeout)
         for lock in self.client_to_locks[client_id]:
             lock.mark_free_after = mark_free_at
         logger.debug(f'Marked to free at {mark_free_at} for {client_id}')
@@ -395,7 +397,7 @@ class InMemoryLockStorage(LockStorage):
             os.remove(self._dump_file_name)
 
     def stats(self):
-        return dict(lock_count=len(self.all_locks))
+        return dict(lock_count=len(self.all_locks), dump_file=ABSOLUTE_PATH(self._dump_file_name))
 
 
 class CommandProtocol(asyncio.Protocol):
@@ -745,6 +747,12 @@ class LiveLockProtocol(CommandProtocol):
                         return
                     result = list(self.adaptor.find(args[0].decode()))
                     self._reply_data(result)
+                elif verb == 'stats':
+                    if len(args):
+                        self._reply(WRONG_ARGS)
+                        return
+                    result = list(self.adaptor.stats().items())
+                    self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
                     logger.debug(f'SHUTDOWN invoked by {self.client_display}')
                     self.adaptor.terminate()
@@ -841,6 +849,7 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
                            tcp_keepalive_time=None,
                            tcp_keepalive_interval=None,
                            tcp_keepalive_probes=None,
+                           disable_dump_load=None,
                            ):
     # Sanitize values
     tcp_keepalive_time = int(tcp_keepalive_time) if tcp_keepalive_time else None
@@ -860,11 +869,12 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
         data_dir = os.getcwd()
 
     storage = InMemoryLockStorage(release_all_timeout=release_all_timeout)
-    logger.debug(f'Loading dump')
-    storage.load_dump()
-    stats = storage.stats()
+    if not disable_dump_load:
+        logger.debug(f'Loading dump')
+        storage.load_dump()
+        stats = storage.stats()
 
-    logger.info(f'Locks loaded from dump: {stats.get("lock_count", 0)}')
+        logger.info(f'Locks loaded from dump: {stats.get("lock_count", 0)}')
     logger.info(f'Starting live lock server at {bind_to}, {port}')
     logger.debug(f'release_all_timeout={release_all_timeout}')
     logger.debug(f'data_dir={data_dir}')
@@ -901,8 +911,8 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
           tcp_keepalive_time=None,
           tcp_keepalive_interval=None,
           tcp_keepalive_probes=None,
+          disable_dump_load=None,
           ):
-
     env_loglevel = get_settings(None, 'LIVELOCK_LOGLEVEL', DEFAULT_LOGLEVEL)
     loglevel = getattr(logging, env_loglevel.upper())
 
@@ -934,4 +944,5 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
                                  tcp_keepalive_time=get_settings(tcp_keepalive_time, 'LIVELOCK_TCP_KEEPALIVE_TIME', DEFAULT_TCP_KEEPALIVE_TIME),
                                  tcp_keepalive_interval=get_settings(tcp_keepalive_interval, 'LIVELOCK_TCP_KEEPALIVE_INTERVAL', DEFAULT_TCP_KEEPALIVE_INTERVAL),
                                  tcp_keepalive_probes=get_settings(tcp_keepalive_probes, 'LIVELOCK_TCP_KEEPALIVE_PROBES', DEFAULT_TCP_KEEPALIVE_PROBES),
+                                 disable_dump_load=get_settings(disable_dump_load, 'LIVELOCK_DISABLE_DUMP_LOAD', DEFAULT_DISABLE_DUMP_LOAD),
                                  ))

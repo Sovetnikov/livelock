@@ -237,7 +237,7 @@ class LiveLockConnection(object):
 
 
 class LiveLock(object):
-    def __init__(self, id, blocking=True, timeout=-1, live_lock_connection=None):
+    def __init__(self, id, blocking=True, timeout=60*5, live_lock_connection=None):
         if live_lock_connection is None:
             live_lock_connection = _get_connection()
         self._connection = live_lock_connection
@@ -257,7 +257,15 @@ class LiveLock(object):
             row[0] = row[0].decode()
         return data
 
+    @classmethod
+    def is_locked(cls, lock_id):
+        connection = _get_connection()
+        resp = connection.send_command('LOCKED', lock_id)
+        return resp == '1'
+
     def acquire(self, blocking=None):
+        if self.timeout <= 0:
+            raise Exception('Acquire timeout must be positive')
         if blocking is None:
             blocking = self.blocking
 
@@ -267,8 +275,10 @@ class LiveLock(object):
             if self._acquire():
                 return True
 
-            while self.timeout < 0 or time.monotonic() < deadline:
+            while time.monotonic() < deadline:
                 sleep_time = deadline - time.monotonic()
+                if sleep_time < 0:
+                    sleep_time = 0
                 if sleep_time < self.retry_interval:
                     # seems last lock acquire try
                     sleep_time = sleep_time / 2
