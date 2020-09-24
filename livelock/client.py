@@ -88,6 +88,9 @@ class LiveLockConnection(object):
             if self._sock_pid and self._sock_pid != os.getpid():
                 logger.info('Process PID changed, connecting')
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Disabling Nagle's algorithm for our "chatty" app
+            # https://eklitzke.org/the-caveats-of-tcp-nodelay
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.settimeout(5.0)
             x = sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
             if (x == 0):

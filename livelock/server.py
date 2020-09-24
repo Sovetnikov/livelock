@@ -3,6 +3,7 @@ import logging
 import os
 import pickle
 import signal
+import socket
 import time
 import uuid
 from asyncio import StreamReader, IncompleteReadError
@@ -448,7 +449,8 @@ class CommandProtocol(asyncio.Protocol):
                                           tcp_keepalive_intvl=self.tcp_keepalive_interval,
                                           tcp_keepalive_cnt=self.tcp_keepalive_probes,
                                           ))
-
+        # https://eklitzke.org/the-caveats-of-tcp-nodelay
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.transport = transport
         self._reader = StreamReader()
         self._reader.set_transport(transport)
