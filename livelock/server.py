@@ -11,13 +11,19 @@ from collections import defaultdict
 from fnmatch import fnmatch
 
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
-    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD
+    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, DEFAULT_TCP_USER_TIMEOUT_SECONDS
 from livelock.stats import latency, max_lock_live_time
 from livelock.tcp_opts import set_tcp_keepalive
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
 logger = logging.getLogger(__name__)
 
+
+# Надо сделать
+# 1. Очистку client_to_locks
+# 2. Очистку client_last_adress
+# 3. Протоколирование длительности операций
+# 4. Хранение clientinfo
 
 class LockStorage(object):
     def __init__(self, release_all_timeout=DEFAULT_RELEASE_ALL_TIMEOUT):
@@ -160,7 +166,7 @@ class StorageAdaptor(LockStorage):
     def _on_kill_requested(self, *args, **kwargs):
         # Must wait for active commands to complete, then dump data, close all connections and exit
         self.kill_active = True
-        logger.debug(f'Received terminate signal {args} {kwargs}')
+        logger.debug('Received terminate signal %s %s', args, kwargs)
         if not self._storage_operations_in_process:
             # Good time to dump and exit(), but there is chance that some client's will not get their responses
             self.dump_before_die()
@@ -280,7 +286,7 @@ class InMemoryLockStorage(LockStorage):
         self.client_to_locks[client_id].append(lock_info)
         self.all_locks[lock_id] = lock_info
 
-        logger.debug(f'Acquire {lock_id} for {client_id}')
+        logger.debug('Acquire %s for %s', lock_id, client_id)
         return True
 
     def release(self, client_id, lock_id):
@@ -290,7 +296,7 @@ class InMemoryLockStorage(LockStorage):
         else:
             return False
         self._delete_lock(lock_id)
-        logger.debug(f'Relased {lock_id} for {client_id}')
+        logger.debug('Relased %s for %s', lock_id, client_id)
         return True
 
     def release_all(self, client_id, timeout=None):
@@ -402,11 +408,13 @@ class InMemoryLockStorage(LockStorage):
 
 
 class CommandProtocol(asyncio.Protocol):
-    def __init__(self, tcp_keepalive_time=None, tcp_keepalive_interval=None, tcp_keepalive_probes=None, *args, **kwargs):
+    def __init__(self, tcp_keepalive_time=None, tcp_keepalive_interval=None, tcp_keepalive_probes=None, tcp_user_timeout_seconds=None, *args, **kwargs):
         self.transport = None
         self._reader = None
 
         """
+        https://blog.cloudflare.com/when-tcp-sockets-refuse-to-die/
+        
         http://coryklein.com/tcp/2015/11/25/custom-configuration-of-tcp-socket-keep-alive-timeouts.html
         Keep-Alive Process
         There are three configurable properties that determine how Keep-Alives work. On Linux they are1:
@@ -431,7 +439,7 @@ class CommandProtocol(asyncio.Protocol):
         self.tcp_keepalive_time = int(tcp_keepalive_time)
         self.tcp_keepalive_interval = int(tcp_keepalive_interval)
         self.tcp_keepalive_probes = int(tcp_keepalive_probes)
-
+        self.tcp_user_timeout_seconds = int(tcp_user_timeout_seconds)
         super().__init__(*args, **kwargs)
 
     def data_received(self, data):
@@ -451,6 +459,9 @@ class CommandProtocol(asyncio.Protocol):
                                           ))
         # https://eklitzke.org/the-caveats-of-tcp-nodelay
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if hasattr(socket, 'TCP_USER_TIMEOUT'):
+            logger.info('Setting TCP_USER_TIMEOUT to')
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_USER_TIMEOUT, self.tcp_user_timeout_seconds*1000)
         self.transport = transport
         self._reader = StreamReader()
         self._reader.set_transport(transport)
@@ -851,12 +862,14 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
                            tcp_keepalive_time=None,
                            tcp_keepalive_interval=None,
                            tcp_keepalive_probes=None,
+                           tcp_user_timeout_seconds=None,
                            disable_dump_load=None,
                            ):
     # Sanitize values
     tcp_keepalive_time = int(tcp_keepalive_time) if tcp_keepalive_time else None
     tcp_keepalive_interval = int(tcp_keepalive_interval) if tcp_keepalive_interval else None
     tcp_keepalive_probes = int(tcp_keepalive_probes) if tcp_keepalive_probes else None
+    tcp_user_timeout_seconds = int(tcp_user_timeout_seconds) if tcp_user_timeout_seconds else None
 
     loop = asyncio.get_running_loop()
 
@@ -890,6 +903,7 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
                                                                tcp_keepalive_time=tcp_keepalive_time,
                                                                tcp_keepalive_interval=tcp_keepalive_interval,
                                                                tcp_keepalive_probes=tcp_keepalive_probes,
+                                                               tcp_user_timeout_seconds=tcp_user_timeout_seconds,
                                                                ), bind_to, port)
 
     def exception_handler(loop, context):
@@ -913,6 +927,7 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
           tcp_keepalive_time=None,
           tcp_keepalive_interval=None,
           tcp_keepalive_probes=None,
+          tcp_user_timeout_seconds=None,
           disable_dump_load=None,
           ):
     env_loglevel = get_settings(None, 'LIVELOCK_LOGLEVEL', DEFAULT_LOGLEVEL)
@@ -946,5 +961,6 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
                                  tcp_keepalive_time=get_settings(tcp_keepalive_time, 'LIVELOCK_TCP_KEEPALIVE_TIME', DEFAULT_TCP_KEEPALIVE_TIME),
                                  tcp_keepalive_interval=get_settings(tcp_keepalive_interval, 'LIVELOCK_TCP_KEEPALIVE_INTERVAL', DEFAULT_TCP_KEEPALIVE_INTERVAL),
                                  tcp_keepalive_probes=get_settings(tcp_keepalive_probes, 'LIVELOCK_TCP_KEEPALIVE_PROBES', DEFAULT_TCP_KEEPALIVE_PROBES),
+                                 tcp_user_timeout_seconds=get_settings(tcp_user_timeout_seconds, 'LIVELOCK_TCP_USER_TIMEOUT_SECONDS', DEFAULT_TCP_USER_TIMEOUT_SECONDS),
                                  disable_dump_load=get_settings(disable_dump_load, 'LIVELOCK_DISABLE_DUMP_LOAD', DEFAULT_DISABLE_DUMP_LOAD),
                                  ))
