@@ -396,7 +396,7 @@ class InMemoryLockStorage(LockStorage):
                     logger.debug(f'Marked to free all locks after {self.release_all_timeout + 1} seconds')
             except Exception as e:
                 self._clean_all_data()
-                logger.error(f'Error reading dump file {self._dump_file_name}', exc_info=True)
+                logger.warning(f'Error reading dump file {self._dump_file_name}', exc_info=True)
 
     def clear_dump(self):
         if os.path.isfile(self._dump_file_name):
