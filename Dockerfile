@@ -1,4 +1,4 @@
-FROM python:3.7-alpine
+FROM python:3.7
 
 RUN pip3 install livelock
 RUN pip3 install sentry-sdk==0.14.0
