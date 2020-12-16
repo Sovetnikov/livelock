@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 threadLocal = threading.local()
 
+try:
+    from sentry_sdk import capture_exception
+except ImportError:
+    def capture_exception(*args, **kwargs):
+        pass
 
 def configure(host=None, port=None, password=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
@@ -81,7 +86,7 @@ class LiveLockConnection(object):
         self._sock = None
         self._buffer = None
 
-    def _connect(self, reconnect=True):
+    def _connect(self, reconnect=True, do_conn_on_reconnect=True):
         if not self._sock or self._sock_pid != os.getpid():
             if not self._sock:
                 logger.info('No socket, connecting')
@@ -106,18 +111,21 @@ class LiveLockConnection(object):
                     if not reconnect_attempts:
                         raise e
                     time.sleep(self._reconnect_timeout)
-
+            logger.debug('New socket %s' % sock)
             self._sock = sock
             self._sock_pid = os.getpid()
             self._buffer = SocketBuffer(sock, 65536)
-            self._send_connect(reconnect=reconnect)
+            if do_conn_on_reconnect:
+                self._send_connect(reconnect=reconnect)
 
-    def _reconnect(self):
+    def _reconnect(self, do_conn_on_reconnect=True):
         if self._sock and self._sock_pid == os.getpid():
+            logger.debug('Closing socket before reconnect %s' % self._sock)
             self._sock.close()
         self._sock = None
+        self._buffer = None
         # This proc called from connection loop, do not reconnect on inner commands fail
-        self._connect(reconnect=False)
+        self._connect(reconnect=False, do_conn_on_reconnect=do_conn_on_reconnect)
 
     def _close(self):
         if self._sock and self._sock_pid == os.getpid():
@@ -129,11 +137,11 @@ class LiveLockConnection(object):
             resp = self.send_command('PASS', self._password, reconnect=False)
 
         if self.client_id:
-            client_id = self.send_command('CONN', self.client_id, reconnect=reconnect)
+            client_id = self.send_command('CONN', self.client_id, reconnect=reconnect, do_conn_on_reconnect=False)
             if client_id != self.client_id:
                 raise Exception('client_id ({client_id}) != self.client_id ({self.client_id})'.format(**locals()))
         else:
-            client_id = self.send_command('CONN', reconnect=reconnect)
+            client_id = self.send_command('CONN', reconnect=reconnect, do_conn_on_reconnect=False)
             self.client_id = client_id
         self.send_command('CONNINFO', '%s:%s' % (socket.gethostname(), os.getpid()), reconnect=reconnect)
 
@@ -238,12 +246,12 @@ class LiveLockConnection(object):
         payload = command.encode() + b'\r\n'
         return self._send_command(payload, reconnect=reconnect)
 
-    def send_command(self, command, *args, reconnect=True):
+    def send_command(self, command, *args, reconnect=True, do_conn_on_reconnect=True):
         payload = pack_resp(([command, ] + list(args)) if args else [command, ])
-        return self._send_command(payload, reconnect=reconnect)
+        return self._send_command(payload, reconnect=reconnect, do_conn_on_reconnect=do_conn_on_reconnect)
 
-    def _send_command(self, payload, reconnect=True):
-        self._connect()
+    def _send_command(self, payload, reconnect=True, do_conn_on_reconnect=True):
+        self._connect(reconnect=reconnect, do_conn_on_reconnect=do_conn_on_reconnect)
 
         data = None
         send_success = None
@@ -257,7 +265,9 @@ class LiveLockConnection(object):
         while reconnect_attempts:
             try:
                 if reconnect_phase:
-                    self._reconnect()
+                    logger.debug('Calling reconnect')
+                    # Reconnection on CONN command socket error causes double CONN command sent
+                    self._reconnect(do_conn_on_reconnect=do_conn_on_reconnect)
                     reconnect_phase = False
                 # if connection lost on AQ command, lock can be acquired by server but we can lost success response from server
                 self._sock.sendall(payload)
@@ -265,6 +275,7 @@ class LiveLockConnection(object):
                 data = self._read_response()
                 break
             except (ConnectionResetError, OSError, ConnectionError) as e:
+                capture_exception(e)
                 logger.info('Got exception on send_command: %s' % e)
                 reconnect_attempts -= 1
                 # Explicitly close socket, because error may be raised on send or receive phase, protocol state is unknown
