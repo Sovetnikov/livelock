@@ -119,6 +119,11 @@ class LiveLockConnection(object):
         # This proc called from connection loop, do not reconnect on inner commands fail
         self._connect(reconnect=False)
 
+    def _close(self):
+        if self._sock and self._sock_pid == os.getpid():
+            logger.debug('Closing socket')
+            self._sock.close()
+
     def _send_connect(self, reconnect=True):
         if self._password:
             resp = self.send_command('PASS', self._password, reconnect=False)
@@ -262,6 +267,9 @@ class LiveLockConnection(object):
             except (ConnectionResetError, OSError, ConnectionError) as e:
                 logger.info('Got exception on send_command: %s' % e)
                 reconnect_attempts -= 1
+                # Explicitly close socket, because error may be raised on send or receive phase, protocol state is unknown
+                # and disable connection reuse
+                self._close()
                 if not reconnect or not reconnect_attempts:
                     raise e
                 logger.info('Got connection error, reconnecting')
