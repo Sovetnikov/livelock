@@ -303,12 +303,12 @@ class InMemoryLockStorage(LockStorage):
         mark_free_at = time.time() + (self.release_all_timeout if not timeout else timeout)
         for lock in self.client_to_locks[client_id]:
             lock.mark_free_after = mark_free_at
-        logger.debug(f'Marked to free at {mark_free_at} for {client_id}')
+        logger.debug('Marked to free at %s for %s', mark_free_at, client_id)
 
     def unrelease_all(self, client_id):
         for lock in self.client_to_locks[client_id]:
             lock.mark_free_after = None
-        logger.debug(f'Restored all locks for {client_id}')
+        logger.debug('Restored all locks for %s', client_id)
 
     def locked(self, lock_id):
         lock_info = self.all_locks.get(lock_id)
@@ -366,7 +366,7 @@ class InMemoryLockStorage(LockStorage):
                     locks_to_client=self.locks_to_client,
                     all_locks=self.all_locks,
                     client_last_address=self.client_last_address)
-        logger.debug('Dumping in memory lock data to %s' % os.path.abspath(self._dump_file_name))
+        logger.debug('Dumping in memory lock data to %s', os.path.abspath(self._dump_file_name))
         with open(self._dump_file_name, mode='wb') as f:
             pickle.dump(data, f)
             f.flush()
@@ -377,7 +377,7 @@ class InMemoryLockStorage(LockStorage):
     def load_dump(self):
         if os.path.isfile(self._dump_file_name):
             try:
-                logger.debug('Loading in memory lock data from %s' % os.path.abspath(self._dump_file_name))
+                logger.debug('Loading in memory lock data from %s', os.path.abspath(self._dump_file_name))
                 with open(self._dump_file_name, mode='rb') as f:
                     data = pickle.load(f)
                 if data is None:
@@ -393,14 +393,14 @@ class InMemoryLockStorage(LockStorage):
                 for client_id in self.client_to_locks.keys():
                     self.release_all(client_id, self.release_all_timeout + 1)
                 if self.client_to_locks:
-                    logger.debug(f'Marked to free all locks after {self.release_all_timeout + 1} seconds')
+                    logger.debug('Marked to free all locks after %s seconds', self.release_all_timeout + 1)
             except Exception as e:
                 self._clean_all_data()
-                logger.warning(f'Error reading dump file {self._dump_file_name}', exc_info=True)
+                logger.warning('Error reading dump file %s', self._dump_file_name, exc_info=True)
 
     def clear_dump(self):
         if os.path.isfile(self._dump_file_name):
-            logger.debug('Removing in memory lock data file %s' % os.path.abspath(self._dump_file_name))
+            logger.debug('Removing in memory lock data file %s', os.path.abspath(self._dump_file_name))
             os.remove(self._dump_file_name)
 
     def stats(self):
@@ -460,7 +460,7 @@ class CommandProtocol(asyncio.Protocol):
         # https://eklitzke.org/the-caveats-of-tcp-nodelay
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         if hasattr(socket, 'TCP_USER_TIMEOUT'):
-            logger.info('Setting TCP_USER_TIMEOUT to')
+            logger.debug('Setting TCP_USER_TIMEOUT to %s', self.tcp_user_timeout_seconds*1000)
             sock.setsockopt(socket.SOL_TCP, socket.TCP_USER_TIMEOUT, self.tcp_user_timeout_seconds*1000)
         self.transport = transport
         self._reader = StreamReader()
@@ -595,23 +595,23 @@ class LiveLockProtocol(CommandProtocol):
         if self.adaptor.kill_active:
             return
         peername = transport.get_extra_info('peername')
-        logger.debug(f'Connection from {peername}')
+        logger.debug('Connection from %s', peername)
         self.transport = transport
         super().connection_made(transport)
 
     def receive_commands_end(self, exc):
-        logger.debug(f'Receive command loop ended for {self.client_display}, Exception={exc}')
+        logger.debug('Receive command loop ended for %s, Exception=%s', self.client_display, exc)
 
     def eof_received(self):
-        logger.debug(f'EOF received for {self.client_display}')
+        logger.debug('EOF received for %s', self.client_display)
         return super().eof_received()
 
     def connection_lost(self, exc):
         peername = self.transport.get_extra_info('peername')
         if self.adaptor.kill_active:
-            logger.debug(f'Connection lost on active kill {self.client_display} client={self.client_id}, Exception={exc}')
+            logger.debug('Connection lost on active kill %s client=%s, Exception=%s', self.client_display, self.client_id, exc)
             return
-        logger.debug(f'Connection lost {self.client_display}, Exception={exc}')
+        logger.debug('Connection lost %s, Exception=%s', self.client_display, exc)
         if self.client_id:
             last_address = self.adaptor.get_client_last_address(self.client_id)
             if last_address and last_address == peername:
@@ -633,7 +633,7 @@ class LiveLockProtocol(CommandProtocol):
         peername = self.transport.get_extra_info('peername')
 
         verb = command.decode().lower()
-        logger.debug(f'Got command {command} from {self.client_display}' if verb != 'pass' else f'Got command PASS from {self.client_display}')
+        logger.debug('Got command %s from %s', command, self.client_display)
 
         self.adaptor.on_command_start()
         try:
@@ -677,10 +677,10 @@ class LiveLockProtocol(CommandProtocol):
                     except:
                         self._reply(WRONG_ARGS)
                         return
-                    logger.debug(f'Got client info for {self.client_display} = {client_info}')
+                    logger.debug('Got client info for %s = %s', self.client_display, client_info)
                     if self.client_info:
                         if self.client_info != client_info:
-                            logger.warning(f'Client info changed for {self.client_display}')
+                            logger.warning('Client info changed for %s', self.client_display)
                     self.client_info = client_info
                     self._reply(True)
                 elif verb in ('aq', 'aqr'):
@@ -767,7 +767,7 @@ class LiveLockProtocol(CommandProtocol):
                     result = self.adaptor.stats()
                     self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
-                    logger.debug(f'SHUTDOWN invoked by {self.client_display}')
+                    logger.debug('SHUTDOWN invoked by %s', self.client_display)
                     self.adaptor.terminate()
                     self._reply('1')
                 else:
@@ -885,14 +885,14 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
 
     storage = InMemoryLockStorage(release_all_timeout=release_all_timeout)
     if not disable_dump_load:
-        logger.debug(f'Loading dump')
+        logger.debug('Loading dump')
         storage.load_dump()
         stats = storage.stats()
 
-        logger.info(f'Locks loaded from dump: {stats.get("lock_count", 0)}')
-    logger.info(f'Starting live lock server at {bind_to}, {port}')
-    logger.debug(f'release_all_timeout={release_all_timeout}')
-    logger.debug(f'data_dir={data_dir}')
+        logger.info('Locks loaded from dump: %s', stats.get("lock_count", 0))
+    logger.info('Starting live lock server at %s, %s', bind_to, port)
+    logger.debug('release_all_timeout=%s', release_all_timeout)
+    logger.debug('data_dir=%s', data_dir)
 
     adaptor = StorageAdaptor(storage)
 
@@ -939,7 +939,7 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
         try:
             prometheus_port = int(prometheus_port)
         except:
-            logger.critical(f'Wrong prometheus port {prometheus_port}')
+            logger.critical('Wrong prometheus port %s', prometheus_port)
             prometheus_port = None
     if prometheus_port:
         try:
@@ -948,7 +948,7 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
             logger.info('Prometheus port is set but prometheus_client not installed (pip install prometheus-client)')
             prometheus_port = None
         if prometheus_port:
-            logger.info(f'Starting prometheus metrics server at port {prometheus_port}')
+            logger.info('Starting prometheus metrics server at port %s', prometheus_port)
             start_http_server(prometheus_port)
 
     asyncio.run(live_lock_server(bind_to=get_settings(bind_to, DEFAULT_BIND_TO, 'LIVELOCK_BIND_TO'),

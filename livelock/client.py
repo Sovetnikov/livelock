@@ -111,7 +111,7 @@ class LiveLockConnection(object):
                     if not reconnect_attempts:
                         raise e
                     time.sleep(self._reconnect_timeout)
-            logger.debug('New socket %s' % sock)
+            logger.debug('New socket %s', sock)
             self._sock = sock
             self._sock_pid = os.getpid()
             self._buffer = SocketBuffer(sock, 65536)
@@ -120,7 +120,7 @@ class LiveLockConnection(object):
 
     def _reconnect(self, do_conn_on_reconnect=True):
         if self._sock and self._sock_pid == os.getpid():
-            logger.debug('Closing socket before reconnect %s' % self._sock)
+            logger.debug('Closing socket before reconnect %s', self._sock)
             self._sock.close()
         self._sock = None
         self._buffer = None
@@ -276,7 +276,7 @@ class LiveLockConnection(object):
                 break
             except (ConnectionResetError, OSError, ConnectionError) as e:
                 capture_exception(e)
-                logger.info('Got exception on send_command: %s' % e)
+                logger.info('Got exception on send_command: %s', e)
                 reconnect_attempts -= 1
                 # Explicitly close socket, because error may be raised on send or receive phase, protocol state is unknown
                 # and disable connection reuse
