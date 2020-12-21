@@ -160,13 +160,13 @@ class StorageAdaptor(LockStorage):
         self._commands_in_process -= 1
         if self.kill_active and not self._commands_in_process:
             if self._storage_operations_in_process:
-                raise Exception('Last command executed, but storage operations counter has value')
+                logger.error('Last command executed, but storage operations counter has value')
             self.die()
 
     def _on_kill_requested(self, *args, **kwargs):
         # Must wait for active commands to complete, then dump data, close all connections and exit
         self.kill_active = True
-        logger.debug('Received terminate signal %s %s', args, kwargs)
+        logger.info('Received terminate signal %s %s', args, kwargs)
         if not self._storage_operations_in_process:
             # Good time to dump and exit(), but there is chance that some client's will not get their responses
             self.dump_before_die()
@@ -366,7 +366,7 @@ class InMemoryLockStorage(LockStorage):
                     locks_to_client=self.locks_to_client,
                     all_locks=self.all_locks,
                     client_last_address=self.client_last_address)
-        logger.debug('Dumping in memory lock data to %s', os.path.abspath(self._dump_file_name))
+        logger.info('Dumping in memory lock data to %s', os.path.abspath(self._dump_file_name))
         with open(self._dump_file_name, mode='wb') as f:
             pickle.dump(data, f)
             f.flush()
@@ -885,7 +885,7 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
 
     storage = InMemoryLockStorage(release_all_timeout=release_all_timeout)
     if not disable_dump_load:
-        logger.debug('Loading dump')
+        logger.info('Loading dump')
         storage.load_dump()
         stats = storage.stats()
 
