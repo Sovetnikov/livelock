@@ -6,13 +6,17 @@ import signal
 import socket
 import time
 import uuid
-from asyncio import StreamReader, IncompleteReadError
+from asyncio import StreamReader, IncompleteReadError, Event
 from collections import defaultdict
 from fnmatch import fnmatch
 
+from livelock.memory_storage import InMemoryLockStorage
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
-    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, DEFAULT_TCP_USER_TIMEOUT_SECONDS
-from livelock.stats import latency, max_lock_live_time
+    DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, \
+    DEFAULT_TCP_USER_TIMEOUT_SECONDS, DEFAULT_MAINTENANCE_TIMEOUT_MS, DEFAULT_MAINTENANCE_PERIOD, get_float_settings, get_int_settings, SERVER_TERMINATING, CONN_HAS_ID_ERROR, \
+    WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS
+from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time
+from livelock.storage import LockStorage
 from livelock.tcp_opts import set_tcp_keepalive
 
 ABSOLUTE_PATH = lambda x: os.path.abspath(os.path.join(os.path.abspath(os.path.dirname(__file__)), x))
@@ -25,106 +29,6 @@ logger = logging.getLogger(__name__)
 # 3. Протоколирование длительности операций
 # 4. Хранение clientinfo
 
-class LockStorage(object):
-    def __init__(self, release_all_timeout=DEFAULT_RELEASE_ALL_TIMEOUT):
-        self.release_all_timeout = release_all_timeout
-
-    def acquire(self, client_id, lock_id, reentrant):
-        raise NotImplemented
-
-    def release(self, client_id, lock_id):
-        raise NotImplemented
-
-    def release_all(self, client_id):
-        raise NotImplemented
-
-    def unrelease_all(self, client_id):
-        raise NotImplemented
-
-    def locked(self, lock_id):
-        raise NotImplemented
-
-    def set_client_last_address(self, client_id, address):
-        raise NotImplemented
-
-    def get_client_last_address(self, client_id):
-        raise NotImplemented
-
-    def find(self, pattern):
-        raise NotImplemented
-
-    def add_signal(self, lock_id, signal):
-        raise NotImplemented
-
-    def has_signal(self, lock_id, signal):
-        raise NotImplemented
-
-    def remove_signal(self, lock_id, signal):
-        raise NotImplemented
-
-    def dump(self):
-        raise NotImplemented
-
-    def disable_write(self):
-        raise NotImplemented
-
-    def load_dump(self):
-        raise NotImplemented
-
-    def clear_dump(self):
-        raise NotImplemented
-
-
-CONN_REQUIRED_ERROR = 1
-WRONG_ARGS = 2
-CONN_HAS_ID_ERROR = 3
-UNKNOWN_COMMAND_ERROR = 4
-PASS_ERROR = 5
-RESP_ERROR = 6
-SERVER_ERROR = 7
-KEY_NOT_EXISTS = 8
-SERVER_TERMINATING = 9
-
-ERRORS = {
-    CONN_REQUIRED_ERROR: 'CONN required first',
-    WRONG_ARGS: 'Wrong number of arguments',
-    CONN_HAS_ID_ERROR: 'Already has client id',
-    UNKNOWN_COMMAND_ERROR: 'Unknown command',
-    PASS_ERROR: 'Wrong or no password',
-    RESP_ERROR: 'RESP protocol error',
-    SERVER_ERROR: 'Server error',
-    KEY_NOT_EXISTS: 'Key does not exists',
-    SERVER_TERMINATING: 'Server terminating',
-}
-
-
-class MemoryLockInfo(object):
-    __slots__ = ('id', 'time', 'mark_free_after', 'signals')
-
-    def __init__(self, id, time):
-        self.id = id
-        self.time = time
-        self.mark_free_after = None
-        self.signals = None
-
-    @property
-    def expired(self):
-        if self.mark_free_after:
-            return time.time() >= self.mark_free_after
-        return False
-
-    def add_signal(self, signal):
-        if self.signals is None:
-            self.signals = set()
-        self.signals.add(signal)
-
-    def remove_signal(self, signal):
-        if self.signals is not None:
-            self.signals.remove(signal)
-
-    def has_signal(self, signal):
-        return self.signals is not None and signal in self.signals
-
 
 class StorageAdaptor(LockStorage):
     def __init__(self, store):
@@ -133,6 +37,8 @@ class StorageAdaptor(LockStorage):
         self._storage_operations_in_process = 0
         self._commands_in_process = 0
         self._data_dumped = False
+        self._maintenance_event = Event()
+
         signal.signal(signal.SIGINT, self._on_kill_requested)
         signal.signal(signal.SIGTERM, self._on_kill_requested)
 
@@ -153,7 +59,11 @@ class StorageAdaptor(LockStorage):
             # then exit() after sending replies to clients
             self.dump_before_die()
 
-    def on_command_start(self):
+    def is_commands_in_process(self):
+        return self._commands_in_process > 0
+
+    async def on_command_start(self):
+        await self._maintenance_event.wait()
         self._commands_in_process += 1
 
     def on_command_end(self):
@@ -197,9 +107,9 @@ class StorageAdaptor(LockStorage):
         with StorageOperationGuard(self):
             return self.store.release(*args, **kwargs)
 
-    def release_all(self, *args, **kwargs):
+    def release_all(self, client_id):
         with StorageOperationGuard(self):
-            return self.store.release_all(*args, **kwargs)
+            return self.store.release_all(client_id=client_id, timeout=self.release_all_timeout)
 
     def unrelease_all(self, *args, **kwargs):
         with StorageOperationGuard(self):
@@ -232,9 +142,6 @@ class StorageAdaptor(LockStorage):
     def dump(self):
         return self.store.dump()
 
-    def disable_write(self):
-        return self.store.disable_write()
-
     def load_dump(self):
         return self.store.load_dump()
 
@@ -244,167 +151,15 @@ class StorageAdaptor(LockStorage):
     def stats(self):
         return self.store.stats()
 
-class InMemoryLockStorage(LockStorage):
-    def __init__(self, *args, **kwargs):
-        self._clean_all_data()
-        self._dump_file_name = 'livelock_memstor_dump.pickle'
-        self._write_disabled = False
-
-        super().__init__(*args, **kwargs)
-
-    def _clean_all_data(self):
-        self.client_to_locks = defaultdict(list)
-        self.locks_to_client = dict()
-        self.all_locks = dict()
-        self.client_last_address = dict()
-
-    def _delete_lock(self, lock_id):
-        client_id = self.locks_to_client.pop(lock_id)
-        lock_info = self.all_locks.pop(lock_id)
-        self.client_to_locks[client_id].remove(lock_info)
-
-    def _maintenance(self):
-        for lock_id, lock_info in dict(self.all_locks).items():
-            if lock_info.expired:
-                self._delete_lock(lock_id)
-
-    def acquire(self, client_id, lock_id, reentrant=False):
-        # Check lock expired
-        lock_info = self.all_locks.get(lock_id)
-        if lock_info and lock_info.expired:
-            self._delete_lock(lock_id)
-
-        locked_by = self.locks_to_client.get(lock_id)
-        if locked_by:
-            if reentrant and locked_by == client_id:
-                # Maybe update lock time?
-                return True
-            return False
-        self.locks_to_client[lock_id] = client_id
-
-        lock_info = MemoryLockInfo(id=lock_id, time=time.time())
-        self.client_to_locks[client_id].append(lock_info)
-        self.all_locks[lock_id] = lock_info
-
-        logger.debug('Acquire %s for %s', lock_id, client_id)
-        return True
-
-    def release(self, client_id, lock_id):
-        for lock in self.client_to_locks[client_id]:
-            if lock.id == lock_id:
-                break
-        else:
-            return False
-        self._delete_lock(lock_id)
-        logger.debug('Relased %s for %s', lock_id, client_id)
-        return True
-
-    def release_all(self, client_id, timeout=None):
-        mark_free_at = time.time() + (self.release_all_timeout if not timeout else timeout)
-        for lock in self.client_to_locks[client_id]:
-            lock.mark_free_after = mark_free_at
-        logger.debug('Marked to free at %s for %s', mark_free_at, client_id)
-
-    def unrelease_all(self, client_id):
-        for lock in self.client_to_locks[client_id]:
-            lock.mark_free_after = None
-        logger.debug('Restored all locks for %s', client_id)
-
-    def locked(self, lock_id):
-        lock_info = self.all_locks.get(lock_id)
-        if lock_info:
-            if lock_info.expired:
-                self._delete_lock(lock_id)
-                return False
-            else:
-                return True
-        return False
-
-    def set_client_last_address(self, client_id, address):
-        self.client_last_address[client_id] = address
-
-    def get_client_last_address(self, client_id):
-        return self.client_last_address.get(client_id, None)
-
-    def find(self, pattern):
-        for lock_id, lock_info in self.all_locks.items():
-            if lock_info.expired:
-                continue
-            if fnmatch(lock_id, pattern):
-                yield (lock_id, lock_info.time)
-
-    def add_signal(self, lock_id, signal):
-        lock_info = self.all_locks.get(lock_id)
-        if not lock_info:
-            return KEY_NOT_EXISTS
-        lock_info.add_signal(signal)
-        return True
-
-    def has_signal(self, lock_id, signal):
-        lock_info = self.all_locks.get(lock_id)
-        if not lock_info:
-            return KEY_NOT_EXISTS
-        return lock_info.has_signal(signal)
-
-    def remove_signal(self, lock_id, signal):
-        lock_info = self.all_locks.get(lock_id)
-        if not lock_info:
-            return KEY_NOT_EXISTS
-        if lock_info.signals is None:
-            return False
+    def maintenance(self, *args, **kwargs):
+        logger.debug('Doing maintenance')
         try:
-            lock_info.signals.remove(signal)
-            return True
-        except:
-            return False
+            self._maintenance_event.clear()
+            return self.store.maintenance(*args, **kwargs)
+        finally:
+            self._maintenance_event.set()
 
-    def dump(self):
-        # Dump data as fast as we can
-        # All saved locks will be marked to free by timeout on dump load
-        data = dict(dump_time=time.time(),
-                    client_to_locks=self.client_to_locks,
-                    locks_to_client=self.locks_to_client,
-                    all_locks=self.all_locks,
-                    client_last_address=self.client_last_address)
-        logger.info('Dumping in memory lock data to %s', os.path.abspath(self._dump_file_name))
-        with open(self._dump_file_name, mode='wb') as f:
-            pickle.dump(data, f)
-            f.flush()
 
-    def disable_write(self):
-        self._write_disabled = True
-
-    def load_dump(self):
-        if os.path.isfile(self._dump_file_name):
-            try:
-                logger.debug('Loading in memory lock data from %s', os.path.abspath(self._dump_file_name))
-                with open(self._dump_file_name, mode='rb') as f:
-                    data = pickle.load(f)
-                if data is None:
-                    raise Exception('No data in dump')
-                self.client_to_locks = data['client_to_locks']
-                self.locks_to_client = data['locks_to_client']
-                self.all_locks = data['all_locks']
-                self.client_last_address = data['client_last_address']
-
-                # Delete expired locks
-                self._maintenance()
-
-                for client_id in self.client_to_locks.keys():
-                    self.release_all(client_id, self.release_all_timeout + 1)
-                if self.client_to_locks:
-                    logger.debug('Marked to free all locks after %s seconds', self.release_all_timeout + 1)
-            except Exception as e:
-                self._clean_all_data()
-                logger.warning('Error reading dump file %s', self._dump_file_name, exc_info=True)
-
-    def clear_dump(self):
-        if os.path.isfile(self._dump_file_name):
-            logger.debug('Removing in memory lock data file %s', os.path.abspath(self._dump_file_name))
-            os.remove(self._dump_file_name)
-
-    def stats(self):
-        return dict(lock_count=len(self.all_locks), dump_file_path=os.path.abspath(self._dump_file_name))
 
 
 class CommandProtocol(asyncio.Protocol):
@@ -460,8 +215,8 @@ class CommandProtocol(asyncio.Protocol):
         # https://eklitzke.org/the-caveats-of-tcp-nodelay
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         if hasattr(socket, 'TCP_USER_TIMEOUT'):
-            logger.debug('Setting TCP_USER_TIMEOUT to %s', self.tcp_user_timeout_seconds*1000)
-            sock.setsockopt(socket.SOL_TCP, socket.TCP_USER_TIMEOUT, self.tcp_user_timeout_seconds*1000)
+            logger.debug('Setting TCP_USER_TIMEOUT to %s', self.tcp_user_timeout_seconds * 1000)
+            sock.setsockopt(socket.SOL_TCP, socket.TCP_USER_TIMEOUT, self.tcp_user_timeout_seconds * 1000)
         self.transport = transport
         self._reader = StreamReader()
         self._reader.set_transport(transport)
@@ -551,7 +306,7 @@ class CommandProtocol(asyncio.Protocol):
                 else:
                     command = c + await self._reader.readuntil(b'\r\n')
                     value = [x.strip().encode() for x in command.decode().split(' ')]
-            except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError) as e:
+            except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError, TimeoutError) as e:
                 # Connection is closed
                 self.receive_commands_end(e)
                 return
@@ -635,7 +390,7 @@ class LiveLockProtocol(CommandProtocol):
         verb = command.decode().lower()
         logger.debug('Got command %s from %s', command, self.client_display)
 
-        self.adaptor.on_command_start()
+        await self.adaptor.on_command_start()
         try:
             if self.password and not self._authorized:
                 if verb == 'pass':
@@ -844,6 +599,7 @@ class StorageOperationGuard(object):
 
 async def stats_collector(adaptor):
     while True:
+        st = time.time()
         max_live_lock = 0
         locks = list(adaptor.find('*'))
         if locks:
@@ -852,7 +608,30 @@ async def stats_collector(adaptor):
             max_live_lock = int(now - first_lock[1])
 
         max_lock_live_time.set(max_live_lock)
+        ed = time.time()
+        stats_collection_time.inc(ed - st)
         await asyncio.sleep(5)
+
+
+async def maintenance_scheduler(adaptor, period, timeout_ms):
+    """
+    "Sampling" scheduler of maintenance call
+    """
+    logger.debug('Starting maintenance scheduler, period %s, timeout_ms %s', period, timeout_ms)
+    while True:
+        if not adaptor.is_commands_in_process() and not adaptor.kill_active:
+            # Can do maintenance
+            st = time.time()
+            adaptor.maintenance(timeout_ms=timeout_ms)
+            ed = time.time()
+            t = (ed - st) * 1000
+            logger.debug('Maintenance time %s ms', t)
+            if t > timeout_ms:
+                logger.warning('Maintenance timeout exceeded, configured=%s ms, actual=%s ms, ', timeout_ms, t)
+            maintenance_time.inc(t)
+        else:
+            logger.debug('Skipping maintenance')
+        await asyncio.sleep(period)
 
 
 async def live_lock_server(bind_to, port, release_all_timeout, password=None,
@@ -912,12 +691,19 @@ async def live_lock_server(bind_to, port, release_all_timeout, password=None,
 
     loop.set_exception_handler(exception_handler)
 
-    stats_collector_task = loop.create_task(stats_collector(adaptor))
+    if prometheus_client_installed:
+        stats_collector_task = loop.create_task(stats_collector(adaptor))
+
+    maintenance_scheduler_task = loop.create_task(maintenance_scheduler(adaptor,
+                                                                        period=get_float_settings(None, 'LIVELOCK_MAINTENANCE_PERIOD', DEFAULT_MAINTENANCE_PERIOD),
+                                                                        timeout_ms=get_int_settings(None, 'LIVELOCK_MAINTENANCE_TIMEOUT_MS', DEFAULT_MAINTENANCE_TIMEOUT_MS)))
 
     async with server:
         await server.serve_forever()
 
-    stats_collector_task.cancel()
+    if prometheus_client_installed:
+        stats_collector_task.cancel()
+    maintenance_scheduler_task.cancel()
 
 
 def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password=None,

@@ -5,8 +5,7 @@ import threading
 import time
 
 from livelock.connection import SocketBuffer
-from livelock.server import KEY_NOT_EXISTS
-from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp
+from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS
 
 logger = logging.getLogger(__name__)
 
