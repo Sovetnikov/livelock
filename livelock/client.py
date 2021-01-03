@@ -274,7 +274,6 @@ class LiveLockConnection(object):
                 data = self._read_response()
                 break
             except (ConnectionResetError, OSError, ConnectionError) as e:
-                capture_exception(e)
                 logger.info('Got exception on send_command: %s', e)
                 reconnect_attempts -= 1
                 # Explicitly close socket, because error may be raised on send or receive phase, protocol state is unknown
