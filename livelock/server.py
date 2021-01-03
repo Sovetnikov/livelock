@@ -1,21 +1,19 @@
 import asyncio
 import logging
 import os
-import pickle
 import signal
 import socket
 import time
 import uuid
 from asyncio import StreamReader, IncompleteReadError, Event
-from collections import defaultdict
-from fnmatch import fnmatch
+from timeit import default_timer
 
 from livelock.memory_storage import InMemoryLockStorage
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
     DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, \
     DEFAULT_TCP_USER_TIMEOUT_SECONDS, DEFAULT_MAINTENANCE_TIMEOUT_MS, DEFAULT_MAINTENANCE_PERIOD, get_float_settings, get_int_settings, SERVER_TERMINATING, CONN_HAS_ID_ERROR, \
     WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS
-from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time
+from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time, stats_collection_count, maintenance_count
 from livelock.storage import LockStorage
 from livelock.tcp_opts import set_tcp_keepalive
 
@@ -156,8 +154,6 @@ class StorageAdaptor(LockStorage):
             return self.store.maintenance(*args, **kwargs)
         finally:
             self._maintenance_event.set()
-
-
 
 
 class CommandProtocol(asyncio.Protocol):
@@ -379,8 +375,15 @@ class LiveLockProtocol(CommandProtocol):
     def kill_active(self):
         return self.adaptor.kill_active
 
-    @latency.time()
     async def on_command_received(self, command, *args):
+        st = default_timer()
+        verb = 'unknown'
+        try:
+            verb = await self.process_command(command, *args)
+        finally:
+            latency.labels(verb).observe(max(default_timer() - st, 0))
+
+    async def process_command(self, command, *args):
         if self.kill_active:
             self.reply_terminating()
             return
@@ -610,6 +613,7 @@ async def stats_collector(adaptor):
         max_lock_live_time.set(max_live_lock)
         ed = time.time()
         stats_collection_time.inc(ed - st)
+        stats_collection_count.inc()
         await asyncio.sleep(5)
 
 
@@ -629,6 +633,7 @@ async def maintenance_scheduler(adaptor, period, timeout_ms):
             if t > timeout_ms:
                 logger.warning('Maintenance timeout exceeded, configured=%s ms, actual=%s ms, ', timeout_ms, t)
             maintenance_time.inc(t)
+            maintenance_count.inc()
         else:
             logger.debug('Skipping maintenance')
         await asyncio.sleep(period)
