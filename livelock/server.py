@@ -381,7 +381,7 @@ class LiveLockProtocol(CommandProtocol):
         try:
             verb = await self.process_command(command, *args)
         finally:
-            latency.labels(verb).observe(max(default_timer() - st, 0))
+            latency.labels(verb if verb is not None else 'unknown').observe(max(default_timer() - st, 0))
 
     async def process_command(self, command, *args):
         if self.kill_active:
@@ -540,6 +540,8 @@ class LiveLockProtocol(CommandProtocol):
                     self._reply(UNKNOWN_COMMAND_ERROR)
         finally:
             self.adaptor.on_command_end()
+        # For stats returning verb
+        return verb
 
     def _reply_data(self, data):
         payload = pack_resp(data)
