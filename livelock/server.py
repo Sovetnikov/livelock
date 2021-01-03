@@ -24,8 +24,6 @@ logger = logging.getLogger(__name__)
 
 
 # Надо сделать
-# 1. Очистку client_to_locks
-# 2. Очистку client_last_adress
 # 3. Протоколирование длительности операций
 # 4. Хранение clientinfo
 
