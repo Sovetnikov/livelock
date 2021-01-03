@@ -369,7 +369,9 @@ class LiveLockProtocol(CommandProtocol):
         logger.debug('Connection lost %s, Exception=%s', self.client_display, exc)
         if self.client_id:
             last_address = self.adaptor.get_client_last_address(self.client_id)
-            if last_address and last_address == peername:
+            if last_address is None:
+                logger.warning('Client last address is empty')
+            if (last_address and last_address == peername) or last_address is None:
                 # Releasing all client locks only if last known connection is dropped
                 # other old connection can be dead
                 self.adaptor.release_all(self.client_id)
@@ -716,6 +718,15 @@ def start(bind_to=DEFAULT_BIND_TO, port=None, release_all_timeout=None, password
           tcp_user_timeout_seconds=None,
           disable_dump_load=None,
           ):
+    sentry_dsn = get_settings(None, 'SENTRY_DSN', None)
+    if sentry_dsn:
+        logger.debug('Turning ON sentry')
+        try:
+            import sentry_sdk
+            sentry_sdk.init(dsn=sentry_dsn)
+        except ImportError:
+            logger.error('No sentry-sdk installed')
+
     env_loglevel = get_settings(None, 'LIVELOCK_LOGLEVEL', DEFAULT_LOGLEVEL)
     loglevel = getattr(logging, env_loglevel.upper())
 
