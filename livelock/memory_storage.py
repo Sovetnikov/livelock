@@ -213,6 +213,6 @@ class InMemoryLockStorage(LockStorage):
                     self._delete_lock(lock.id)
             if not self.client_to_locks[client_id]:
                 self.client_to_locks.pop(client_id)
-            self.client_last_address.pop(client_id, None)
+                self.client_last_address.pop(client_id, None)
             if finish():
                 return
