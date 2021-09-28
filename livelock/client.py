@@ -7,6 +7,8 @@ import time
 from livelock.connection import SocketBuffer
 from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS
 
+LIVELOCK_STUB = get_settings(None, 'LIVELOCK_STUB', False)
+
 logger = logging.getLogger(__name__)
 
 threadLocal = threading.local()
@@ -64,10 +66,10 @@ class LiveLockConnection(object):
 
         self._reconnect_timeout = 1
         self._reconnect_attempts = 3
-        
+
         self.client_id = client_id
         self._sock_pid = os.getpid()
-    
+
     @property
     def client_id(self):
         if self._client_id_pid == os.getpid():
@@ -286,12 +288,9 @@ class LiveLockConnection(object):
                 if reconnect_attempts != self._reconnect_attempts - 1:
                     time.sleep(self._reconnect_timeout)
                 # if send_success:
-                    # FIXME: if AQ command sended but answer is not received make AQR on next try
-                    # pass
                 # Maybe check that locked resources still locked and relock if necessary (in case lock server restarted)
                 reconnect_phase = True
         return data
-
 
 class LiveLock(object):
     def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
@@ -419,3 +418,31 @@ class LiveRLock(LiveLock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reentrant = True
+
+
+class LiveLockStub(LiveLock):
+    def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
+        self.id = id
+        self.acquired = False
+        self.reentrant = False
+        self.blocking = blocking
+
+    @classmethod
+    def find(self, *args, **kwargs):
+        return []
+
+    @classmethod
+    def is_locked(self, *args, **kwargs):
+        return False
+
+    def acquire(self, *args, **kwargs):
+        return True
+
+    def release(self, *args, **kwargs):
+        pass
+
+    def locked(self):
+        return self.acquired
+
+if LIVELOCK_STUB:
+    LiveLock = LiveLockStub
