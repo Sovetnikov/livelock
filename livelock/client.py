@@ -300,6 +300,12 @@ class LiveLock(object):
         resp = connection.send_command('LOCKED', lock_id)
         return resp == '1'
 
+    def __bool__(self):
+        return self.acquired
+
+    def __nonzero__(self):
+        return self.acquired
+
     def acquire(self, blocking=None):
         if self.timeout < 0:
             raise Exception('Acquire timeout must be positive')
