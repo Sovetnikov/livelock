@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import random
@@ -36,6 +35,8 @@ class TestLiveLock(unittest.TestCase):
         self.network_disabled = False
         self.killed_connection = 0
         self.blocked_connection = 0
+        # Aggressive maintenance for test purposes
+        os.environ['LIVELOCK_MAINTENANCE_PERIOD'] = str(0.5)
 
     @contextmanager
     def disable_network(self):
@@ -252,7 +253,7 @@ class TestLiveLock(unittest.TestCase):
         self.assertTrue(resp2, list)
         self.assertEqual(len(resp2), 1)
         self.assertEqual(resp1[0], resp2[0])
-        
+
         resp1 = command1('SIGSET 1 SIG1')
         self.assertEqual(resp1, '1')
 
@@ -521,7 +522,7 @@ class TestLiveLock(unittest.TestCase):
                         time.sleep(0.1)
 
     def test_bad_dump(self):
-        #logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
+        # logging.basicConfig(level=logging.DEBUG, format='%(name)s:[%(levelname)s]: %(message)s')
         release_all_timeout = 5
         port = self._start_server(release_all_timeout=release_all_timeout, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=True)
         os.environ['LIVELOCK_PORT'] = str(port)
@@ -554,7 +555,7 @@ class TestLiveLock(unittest.TestCase):
         port = self._start_server(release_all_timeout=release_all_timeout, port=port, shutdown_support=True, debug=True, log_level='DEBUG', disable_dump_load=False)
         client = LiveLock(id='2')
         self.assertTrue(client.is_locked('1'))
-        time.sleep(release_all_timeout+1)
+        time.sleep(release_all_timeout + 1)
         # Lock must be free after timeout
         self.assertFalse(client.is_locked('1'))
         self.assertTrue(client.acquire())

@@ -1,5 +1,7 @@
 FROM python:3.7
 
+RUN apt-get update && apt-get install -y nano gdb net-tools
+RUN pip3 install pyrasite # pyrasite-shell 1
 RUN pip3 install livelock
 RUN pip3 install sentry-sdk==0.14.0
 RUN pip3 install prometheus-client==0.7.1
