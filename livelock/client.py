@@ -289,6 +289,7 @@ class LiveLockConnection(object):
                     time.sleep(self._reconnect_timeout)
                 # if send_success:
                 # Maybe check that locked resources still locked and relock if necessary (in case lock server restarted)
+                # FIXME: if AQ command sended but answer is not received make AQR on next try
                 reconnect_phase = True
         return data
 
@@ -414,12 +415,6 @@ class LiveLock(object):
             raise e
 
 
-class LiveRLock(LiveLock):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.reentrant = True
-
-
 class LiveLockStub(LiveLock):
     def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
         self.id = id
@@ -429,7 +424,7 @@ class LiveLockStub(LiveLock):
 
     @classmethod
     def find(self, *args, **kwargs):
-        return []
+        pass
 
     @classmethod
     def is_locked(self, *args, **kwargs):
@@ -446,3 +441,13 @@ class LiveLockStub(LiveLock):
 
 if LIVELOCK_STUB:
     LiveLock = LiveLockStub
+
+class LiveRLock(LiveLock):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reentrant = True
+
+class LiveNBLock(LiveLock):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.blocking = False
