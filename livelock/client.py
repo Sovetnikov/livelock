@@ -5,9 +5,10 @@ import threading
 import time
 
 from livelock.connection import SocketBuffer
-from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS
+from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS, DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT
 
 LIVELOCK_STUB = get_settings(None, 'LIVELOCK_STUB', False)
+default_acquire_timeout = get_settings(None, 'LIVELOCK_DEFAULT_ACQUIRE_TIMEOUT', DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT)
 
 logger = logging.getLogger(__name__)
 
@@ -294,14 +295,17 @@ class LiveLockConnection(object):
         return data
 
 class LiveLock(object):
-    def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
+    def __init__(self, id, blocking=True, timeout=None, live_lock_connection=None):
         if live_lock_connection is None:
             live_lock_connection = _get_connection()
         self._connection = live_lock_connection
         self.id = id
         self.acquired = False
         self.retry_interval = 1
-        self.timeout = timeout
+        if timeout is None:
+            self.timeout = default_acquire_timeout
+        else:
+            self.timeout = timeout
         self.reentrant = False
         self.blocking = blocking
 
@@ -416,7 +420,7 @@ class LiveLock(object):
 
 
 class LiveLockStub(LiveLock):
-    def __init__(self, id, blocking=True, timeout=0, live_lock_connection=None):
+    def __init__(self, id, blocking=True, timeout=None, live_lock_connection=None):
         self.id = id
         self.acquired = False
         self.reentrant = False
