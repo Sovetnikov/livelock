@@ -337,6 +337,7 @@ class LiveLock(object):
             deadline = time.monotonic() + self.timeout
             # In case of low or zero timeout
             if self._acquire():
+                self.acquired = True
                 return True
 
             while self.timeout <= 0 or time.monotonic() < deadline:
@@ -355,16 +356,18 @@ class LiveLock(object):
                 time.sleep(sleep_time)
 
                 if self._acquire():
+                    self.acquired = True
                     return True
 
             raise LiveLockClientTimeoutException('Timeout elapsed after %s seconds '
                                                  'while trying to acquire '
                                                  'lock.' % self.timeout)
         else:
-            return self._acquire()
+            self.acquired = self._acquire()
+            return self.acquired
 
     def __enter__(self):
-        self.acquired = self.acquire(blocking=self.blocking)
+        self.acquire(blocking=self.blocking)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
