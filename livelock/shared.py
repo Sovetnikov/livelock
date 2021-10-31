@@ -147,3 +147,12 @@ def pack_resp(data):
         return _pack_bytes(data)
     else:
         raise Exception('Unsupported type %s' % str(t))
+
+class LazyArg(object):
+    __slots__ = ('action',)
+
+    def __init__(self, action):
+        self.action = action
+
+    def __str__(self):
+        return str(self.action())

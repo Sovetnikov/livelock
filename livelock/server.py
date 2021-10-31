@@ -12,7 +12,7 @@ from livelock.memory_storage import InMemoryLockStorage
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
     DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, \
     DEFAULT_TCP_USER_TIMEOUT_SECONDS, DEFAULT_MAINTENANCE_TIMEOUT_MS, DEFAULT_MAINTENANCE_PERIOD, get_float_settings, get_int_settings, SERVER_TERMINATING, CONN_HAS_ID_ERROR, \
-    WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS
+    WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS, LazyArg
 from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time, stats_collection_count, maintenance_count
 from livelock.storage import LockStorage
 from livelock.tcp_opts import set_tcp_keepalive
@@ -329,10 +329,10 @@ class LiveLockProtocol(CommandProtocol):
         self.transport = None
 
         self.debug = get_settings(None, 'LIVELOCK_DEBUG', False)
+        self.lazy_client_display = LazyArg(self.client_display)
 
         super().__init__(*args, **kwargs)
 
-    @property
     def client_display(self):
         if self.transport:
             peername = self.transport.get_extra_info('peername')
@@ -343,24 +343,23 @@ class LiveLockProtocol(CommandProtocol):
     def connection_made(self, transport):
         if self.adaptor.kill_active:
             return
-        peername = transport.get_extra_info('peername')
-        logger.debug('Connection from %s', peername)
+        logger.debug('Connection from %s', LazyArg(lambda: transport.get_extra_info('peername')))
         self.transport = transport
         super().connection_made(transport)
 
     def receive_commands_end(self, exc):
-        logger.debug('Receive command loop ended for %s, Exception=%s', self.client_display, exc)
+        logger.debug('Receive command loop ended for %s, Exception=%s', self.lazy_client_display, exc)
 
     def eof_received(self):
-        logger.debug('EOF received for %s', self.client_display)
+        logger.debug('EOF received for %s', self.lazy_client_display)
         return super().eof_received()
 
     def connection_lost(self, exc):
         peername = self.transport.get_extra_info('peername')
         if self.adaptor.kill_active:
-            logger.debug('Connection lost on active kill %s client=%s, Exception=%s', self.client_display, self.client_id, exc)
+            logger.debug('Connection lost on active kill %s client=%s, Exception=%s', self.lazy_client_display, self.client_id, exc)
             return
-        logger.debug('Connection lost %s, Exception=%s', self.client_display, exc)
+        logger.debug('Connection lost %s, Exception=%s', self.lazy_client_display, exc)
         if self.client_id:
             last_address = self.adaptor.get_client_last_address(self.client_id)
             if last_address is None:
@@ -391,7 +390,7 @@ class LiveLockProtocol(CommandProtocol):
         peername = self.transport.get_extra_info('peername')
 
         verb = command.decode().lower()
-        logger.debug('Got command %s from %s', command, self.client_display)
+        logger.debug('Got command %s from %s', command, self.lazy_client_display)
 
         await self.adaptor.on_command_start()
         try:
@@ -435,10 +434,10 @@ class LiveLockProtocol(CommandProtocol):
                     except:
                         self._reply(WRONG_ARGS)
                         return
-                    logger.debug('Got client info for %s = %s', self.client_display, client_info)
+                    logger.debug('Got client info for %s = %s', self.lazy_client_display, client_info)
                     if self.client_info:
                         if self.client_info != client_info:
-                            logger.warning('Client info changed for %s', self.client_display)
+                            logger.warning('Client info changed for %s', self.lazy_client_display)
                     self.client_info = client_info
                     self._reply(True)
                 elif verb in ('aq', 'aqr'):
@@ -525,7 +524,7 @@ class LiveLockProtocol(CommandProtocol):
                     result = self.adaptor.stats()
                     self._reply_data(result)
                 elif verb == 'shutdown' and self.shutdown_support:
-                    logger.debug('SHUTDOWN invoked by %s', self.client_display)
+                    logger.debug('SHUTDOWN invoked by %s', self.lazy_client_display)
                     self.adaptor.terminate()
                     self._reply('1')
                 else:
