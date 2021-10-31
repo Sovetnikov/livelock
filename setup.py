@@ -1,7 +1,7 @@
 from setuptools import setup
 
 __title__ = 'livelock'
-__version__ = '0.7.8'
+__version__ = '0.7.9'
 __author__ = 'Artem Sovetnikov'
 
 setup(name='livelock',
