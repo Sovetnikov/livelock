@@ -13,7 +13,7 @@ from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAUL
     DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, \
     DEFAULT_TCP_USER_TIMEOUT_SECONDS, DEFAULT_MAINTENANCE_TIMEOUT_MS, DEFAULT_MAINTENANCE_PERIOD, get_float_settings, get_int_settings, SERVER_TERMINATING, CONN_HAS_ID_ERROR, \
     WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS, LazyArg
-from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time, stats_collection_count, maintenance_count
+from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time, stats_collection_count, maintenance_count, lock_count
 from livelock.storage import LockStorage
 from livelock.tcp_opts import set_tcp_keepalive
 
@@ -611,9 +611,9 @@ async def stats_collector(adaptor):
             first_lock = min(locks, key=lambda x: x[1])
             max_live_lock = int(now - first_lock[1])
 
+        lock_count.set(len(locks))
         max_lock_live_time.set(max_live_lock)
-        ed = time.time()
-        stats_collection_time.inc(ed - st)
+        stats_collection_time.inc(time.time() - st)
         stats_collection_count.inc()
         await asyncio.sleep(5)
 

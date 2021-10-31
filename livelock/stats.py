@@ -3,6 +3,7 @@ try:
     from prometheus_client import Gauge, Histogram, Counter
 
     prometheus_client_installed = True
+    lock_count = Gauge('livelock_lock_count', 'Active locks count')
     max_lock_live_time = Gauge('livelock_max_lock_live_time_seconds', 'Maximum locked time of all active locks, in seconds')
     latency = Histogram('livelock_operations_latency_seconds', 'Operations latency', labelnames=('verb',))
     stats_collection_time = Counter('livelock_stats_collection_time_seconds', 'Time spent collecting stats, in seconds')
@@ -31,6 +32,7 @@ except ImportError:
         def observe(self, *args, **kwargs):
             pass
 
+    lock_count = PrometheusStub()
     max_lock_live_time = PrometheusStub()
     latency = PrometheusStub()
     stats_collection_time = PrometheusStub()
