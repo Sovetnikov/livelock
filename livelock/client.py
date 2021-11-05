@@ -424,10 +424,7 @@ class LiveLock(object):
 
 class LiveLockStub(LiveLock):
     def __init__(self, id, blocking=True, timeout=None, live_lock_connection=None):
-        self.id = id
-        self.acquired = False
-        self.reentrant = False
-        self.blocking = blocking
+        super().__init__(id, blocking=blocking, timeout=timeout, live_lock_connection=True)
 
     @classmethod
     def find(self, *args, **kwargs):
@@ -437,7 +434,7 @@ class LiveLockStub(LiveLock):
     def is_locked(self, *args, **kwargs):
         return False
 
-    def acquire(self, *args, **kwargs):
+    def _acquire(self, *args, **kwargs):
         return True
 
     def release(self, *args, **kwargs):
