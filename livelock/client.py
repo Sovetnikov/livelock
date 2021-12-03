@@ -428,7 +428,7 @@ class LiveLockStub(LiveLock):
 
     @classmethod
     def find(self, *args, **kwargs):
-        pass
+        return ()
 
     @classmethod
     def is_locked(self, *args, **kwargs):
