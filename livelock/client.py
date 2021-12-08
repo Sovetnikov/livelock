@@ -322,7 +322,7 @@ class LiveLock(object):
         if data:
             for lock_id, starttime in data:
                 result.append(dict(lock_id=lock_id, start_time=datetime.datetime.fromtimestamp(starttime)))
-        return data
+        return result
 
     @classmethod
     def is_locked(cls, lock_id):
