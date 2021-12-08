@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import socket
@@ -5,7 +6,8 @@ import threading
 import time
 
 from livelock.connection import SocketBuffer
-from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS, DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT
+from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS, \
+    DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT
 
 LIVELOCK_STUB = get_settings(None, 'LIVELOCK_STUB', False)
 default_acquire_timeout = get_settings(None, 'LIVELOCK_DEFAULT_ACQUIRE_TIMEOUT', DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT)
@@ -19,6 +21,7 @@ try:
 except ImportError:
     def capture_exception(*args, **kwargs):
         pass
+
 
 def configure(host=None, port=None, password=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
@@ -224,7 +227,6 @@ class LiveLockConnection(object):
         else:
             raise Exception('Unknown RESP start char %s' % c)
 
-
     def _read_response(self):
         c = self._buffer.read(1)
         if c in b':*$,^#,%':
@@ -261,7 +263,9 @@ class LiveLockConnection(object):
 
         payload_len = len(payload)
         if payload_len > self._max_payload + 1:
-            raise LiveLockClientException('Max command payload size exceeded {payload_len}b with limit of {self._max_payload}b'.format(**locals()))
+            raise LiveLockClientException(
+                'Max command payload size exceeded {payload_len}b with limit of {self._max_payload}b'.format(
+                    **locals()))
         reconnect_phase = False
 
         while reconnect_attempts:
@@ -293,6 +297,7 @@ class LiveLockConnection(object):
                 # FIXME: if AQ command sended but answer is not received make AQR on next try
                 reconnect_phase = True
         return data
+
 
 class LiveLock(object):
     def __init__(self, id, blocking=True, timeout=None, live_lock_connection=None):
@@ -447,13 +452,16 @@ class LiveLockStub(LiveLock):
     def locked(self):
         return self.acquired
 
+
 if LIVELOCK_STUB:
     LiveLock = LiveLockStub
+
 
 class LiveRLock(LiveLock):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reentrant = True
+
 
 class LiveNBLock(LiveLock):
     def __init__(self, *args, **kwargs):
