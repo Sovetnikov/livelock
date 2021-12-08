@@ -173,10 +173,10 @@ class TestLiveLock(unittest.TestCase):
                 with LiveLock(id='prefix2', live_lock_connection=self.connection2) as lock_prefix:
                     all_result = LiveLock.find('*')
                     self.assertEqual(len(all_result), 2)
-                    self.assertTrue('1' in [x[0] for x in all_result])
-                    self.assertTrue('prefix2' in [x[0] for x in all_result])
+                    self.assertTrue('1' in [x['lock_id'] for x in all_result])
+                    self.assertTrue('prefix2' in [x['lock_id'] for x in all_result])
                     pattern_result = LiveLock.find('prefix*')
-                    self.assertTrue('prefix2' in [x[0] for x in pattern_result])
+                    self.assertTrue('prefix2' in [x['lock_id'] for x in pattern_result])
 
                 id1.cancel()
                 self.assertTrue(id1.cancelled())

@@ -313,6 +313,10 @@ class LiveLock(object):
     def find(cls, pattern):
         connection = _get_connection()
         data = connection.send_command('FIND', pattern)
+        result = []
+        if data:
+            for lock_id, starttime in data:
+                result.append(dict(lock_id=lock_id, start_time=datetime.datetime.fromtimestamp(starttime)))
         return data
 
     @classmethod
