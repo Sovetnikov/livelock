@@ -120,7 +120,7 @@ class LiveLockConnection(object):
             logger.debug('New socket %s', sock)
             self._sock = sock
             self._sock_pid = os.getpid()
-            self._buffer = SocketBuffer(sock, 65536, tid=threading.ident())
+            self._buffer = SocketBuffer(sock, 65536, tid=threading.get_ident())
             if do_conn_on_reconnect:
                 self._send_connect(reconnect=reconnect)
 
