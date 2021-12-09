@@ -44,6 +44,7 @@ class SocketBuffer(object):
         self.bytes_written = 0
         # number of bytes read from the buffer
         self.bytes_read = 0
+        self.tid = tid
 
     @property
     def length(self):
