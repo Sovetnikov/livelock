@@ -31,6 +31,7 @@ import socket
 import sys
 
 from ._compat import (recv)
+from .shared import thread_id
 
 SYM_CRLF = b'\r\n'
 
@@ -38,7 +39,7 @@ SERVER_CLOSED_CONNECTION_ERROR = "Connection closed by server."
 
 
 class SocketBuffer(object):
-    def __init__(self, socket, socket_read_size):
+    def __init__(self, socket, socket_read_size, tid=None):
         self._sock = socket
         self.socket_read_size = socket_read_size
         self._buffer = io.BytesIO()
@@ -46,6 +47,7 @@ class SocketBuffer(object):
         self.bytes_written = 0
         # number of bytes read from the buffer
         self.bytes_read = 0
+        self.tid = tid
 
     @property
     def length(self):
@@ -79,6 +81,8 @@ class SocketBuffer(object):
                                   (e.args,))
 
     def read(self, length, read_terminator=False):
+        if self.tid and self.tid != thread_id():
+            raise Exception(f'This connection is bound to another thread')
         if read_terminator:
             length = length + 2  # make sure to read the \r\n terminator
         # make sure we've read enough data from the socket
@@ -93,12 +97,14 @@ class SocketBuffer(object):
         # grow forever
         if self.bytes_read == self.bytes_written:
             self.purge()
-        
+
         if read_terminator:
             return data[:-2]
         return data
 
     def readline(self):
+        if self.tid and self.tid != thread_id():
+            raise Exception(f'This connection is bound to another thread')
         buf = self._buffer
         buf.seek(self.bytes_read)
         data = buf.readline()

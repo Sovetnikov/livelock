@@ -254,6 +254,8 @@ class CommandProtocol(asyncio.Protocol):
         line = await self._reader.readexactly(max(2, len + 2))
         if line[-1] != ord(b'\n'):
             raise Exception(r"line[-1] != ord(b'\n')")
+        if line[-2] != ord(b'\r'):
+            raise Exception(r"line[-2] != ord(b'\r')")
         if len < 0:
             return None
         if len == 0:
