@@ -29,6 +29,7 @@ from __future__ import unicode_literals
 import io
 import socket
 import sys
+import threading
 
 from ._compat import (recv)
 
