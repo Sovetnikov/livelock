@@ -104,7 +104,7 @@ class SocketBuffer(object):
 
     def readline(self):
         if self.tid and self.tid != threading.get_ident():
-            raise Exception(threading.get_ident())
+            raise Exception(f'threading.get_ident()={threading.get_ident()} self.tid={self.tid}')
         buf = self._buffer
         buf.seek(self.bytes_read)
         data = buf.readline()

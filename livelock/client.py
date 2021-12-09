@@ -95,9 +95,9 @@ class LiveLockConnection(object):
     def _connect(self, reconnect=True, do_conn_on_reconnect=True):
         if not self._sock or self._sock_pid != os.getpid():
             if not self._sock:
-                logger.info('No socket, connecting')
+                logger.info('No socket, connecting (PID %s, thread %s)', os.getpid(), threading.get_ident())
             if self._sock_pid and self._sock_pid != os.getpid():
-                logger.info('Process PID changed, connecting')
+                logger.info('Process PID changed, connecting (prev PID %s, PID %s, thread %s)', self._sock_pid, os.getpid(), threading.get_ident())
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # Disabling Nagle's algorithm for our "chatty" app
             # https://eklitzke.org/the-caveats-of-tcp-nodelay
