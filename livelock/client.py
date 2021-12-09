@@ -95,7 +95,7 @@ class LiveLockConnection(object):
         if not self._sock or self._sock_pid != os.getpid():
             # After fork make new socket
             if not self._sock:
-                logger.info('No socket, connecting (PID %s, thread %s)', os.getpid(), thread_id())
+                logger.info('No socket, connecting (PID %s, thread %s) self=%s', os.getpid(), thread_id(), self)
             if self._sock_pid and self._sock_pid != os.getpid():
                 logger.info('Process PID changed, connecting (prev PID %s, PID %s, thread %s)', self._sock_pid, os.getpid(), thread_id())
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -117,10 +117,10 @@ class LiveLockConnection(object):
                     if not reconnect_attempts:
                         raise e
                     time.sleep(self._reconnect_timeout)
-            logger.debug('New socket %s', sock)
             self._sock = sock
             self._sock_pid = os.getpid()
             self._buffer = SocketBuffer(sock, 65536, tid=thread_id())
+            logger.debug('New socket %s, buffer %s, self %s', sock, self._buffer, self)
             if do_conn_on_reconnect:
                 self._send_connect(reconnect=reconnect)
 
@@ -251,12 +251,12 @@ class LiveLockConnection(object):
 
     def send_raw_command(self, command, reconnect=True):
         payload = command.encode() + SYM_CRLF
-        logger.debug('Send command %s', command)
+        logger.debug('Send command %s (thread %s, self %s)', command, thread_id(), self)
         return self._send_command(payload, reconnect=reconnect)
 
     def send_command(self, command, *args, reconnect=True, do_conn_on_reconnect=True):
         payload = pack_resp(([command, ] + list(args)) if args else [command, ])
-        logger.debug('Send command %s (args %s)', command, args)
+        logger.debug('Send command %s (args %s) (thread %s, self %s)', command, args, thread_id(), self)
         return self._send_command(payload, reconnect=reconnect, do_conn_on_reconnect=do_conn_on_reconnect)
 
     def _send_command(self, payload, reconnect=True, do_conn_on_reconnect=True):
