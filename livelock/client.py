@@ -7,7 +7,7 @@ import time
 
 from livelock.connection import SocketBuffer
 from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS, \
-    DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT, SYM_CRLF
+    DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT, SYM_CRLF, thread_id
 
 LIVELOCK_STUB = get_settings(None, 'LIVELOCK_STUB', False)
 default_acquire_timeout = get_settings(None, 'LIVELOCK_DEFAULT_ACQUIRE_TIMEOUT', DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT)
@@ -93,6 +93,7 @@ class LiveLockConnection(object):
 
     def _connect(self, reconnect=True, do_conn_on_reconnect=True):
         if not self._sock or self._sock_pid != os.getpid():
+            # After fork make new socket
             if not self._sock:
                 logger.info('No socket, connecting (PID %s, thread %s)', os.getpid(), thread_id())
             if self._sock_pid and self._sock_pid != os.getpid():
