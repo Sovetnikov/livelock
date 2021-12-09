@@ -42,7 +42,8 @@ DEFAULT_TCP_USER_TIMEOUT_SECONDS = DEFAULT_TCP_KEEPALIVE_TIME + DEFAULT_TCP_KEEP
 DEFAULT_DISABLE_DUMP_LOAD = False
 DEFAULT_MAINTENANCE_TIMEOUT_MS = 50  # milliseconds
 DEFAULT_MAINTENANCE_PERIOD = 10  # seconds
-DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT = 60 # seconds
+DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT = 60  # seconds
+
 
 def get_settings(value, key, default):
     if value is not None:
@@ -62,6 +63,7 @@ def get_settings(value, key, default):
         value = default
     return value
 
+
 def get_int_settings(value, key, default):
     v = get_settings(value, key, default)
     if v is not None and not isinstance(v, float):
@@ -71,6 +73,7 @@ def get_int_settings(value, key, default):
             logger.exception('Can\'t convert settings value "%s" for "%s" into int %s', value, key)
     return default
 
+
 def get_float_settings(value, key, default):
     v = get_settings(value, key, default)
     if v is not None and not isinstance(v, float):
@@ -79,6 +82,7 @@ def get_float_settings(value, key, default):
         except:
             logger.exception('Can\'t convert settings value "%s" for "%s" into float %s', value, key)
     return default
+
 
 def _pack_bytes(value):
     return b''.join((b'^', str(len(value)).encode(), SYM_CRLF, value, SYM_CRLF))
@@ -152,6 +156,7 @@ def pack_resp(data):
     else:
         raise Exception('Unsupported type %s' % str(t))
 
+
 class LazyArg(object):
     __slots__ = ('action',)
 
@@ -160,6 +165,7 @@ class LazyArg(object):
 
     def __str__(self):
         return str(self.action())
+
 
 def thread_id():
     return str(os.getpid()) + str(threading.get_ident())
