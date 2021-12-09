@@ -33,6 +33,8 @@ import threading
 
 from ._compat import (recv)
 
+SYM_CRLF = b'\r\n'
+
 SERVER_CLOSED_CONNECTION_ERROR = "Connection closed by server."
 
 
