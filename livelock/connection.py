@@ -82,7 +82,7 @@ class SocketBuffer(object):
 
     def read(self, length, read_terminator=False):
         if self.tid and self.tid != threading.get_ident():
-            raise Exception(threading.get_ident())
+            raise Exception(f'threading.get_ident()={threading.get_ident()} self.tid={self.tid}')
         if read_terminator:
             length = length + 2  # make sure to read the \r\n terminator
         # make sure we've read enough data from the socket
