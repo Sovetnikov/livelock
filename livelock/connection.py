@@ -32,6 +32,7 @@ import sys
 import threading
 
 from ._compat import (recv)
+from .shared import thread_id
 
 SYM_CRLF = b'\r\n'
 
@@ -81,8 +82,8 @@ class SocketBuffer(object):
                                   (e.args,))
 
     def read(self, length, read_terminator=False):
-        if self.tid and self.tid != threading.get_ident():
-            raise Exception(f'threading.get_ident()={threading.get_ident()} self.tid={self.tid}')
+        if self.tid and self.tid != thread_id():
+            raise Exception(f'thread_id()={thread_id()} self.tid={self.tid}')
         if read_terminator:
             length = length + 2  # make sure to read the \r\n terminator
         # make sure we've read enough data from the socket
@@ -103,8 +104,8 @@ class SocketBuffer(object):
         return data
 
     def readline(self):
-        if self.tid and self.tid != threading.get_ident():
-            raise Exception(f'threading.get_ident()={threading.get_ident()} self.tid={self.tid}')
+        if self.tid and self.tid != thread_id():
+            raise Exception(f'thread_id()={thread_id()} self.tid={self.tid}')
         buf = self._buffer
         buf.seek(self.bytes_read)
         data = buf.readline()

@@ -22,7 +22,6 @@ except ImportError:
     def capture_exception(*args, **kwargs):
         pass
 
-
 def configure(host=None, port=None, password=None):
     existing_connection = getattr(threadLocal, 'live_lock_connection', None)
     if existing_connection:
@@ -95,9 +94,9 @@ class LiveLockConnection(object):
     def _connect(self, reconnect=True, do_conn_on_reconnect=True):
         if not self._sock or self._sock_pid != os.getpid():
             if not self._sock:
-                logger.info('No socket, connecting (PID %s, thread %s)', os.getpid(), threading.get_ident())
+                logger.info('No socket, connecting (PID %s, thread %s)', os.getpid(), thread_id())
             if self._sock_pid and self._sock_pid != os.getpid():
-                logger.info('Process PID changed, connecting (prev PID %s, PID %s, thread %s)', self._sock_pid, os.getpid(), threading.get_ident())
+                logger.info('Process PID changed, connecting (prev PID %s, PID %s, thread %s)', self._sock_pid, os.getpid(), thread_id()())
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # Disabling Nagle's algorithm for our "chatty" app
             # https://eklitzke.org/the-caveats-of-tcp-nodelay
@@ -120,7 +119,7 @@ class LiveLockConnection(object):
             logger.debug('New socket %s', sock)
             self._sock = sock
             self._sock_pid = os.getpid()
-            self._buffer = SocketBuffer(sock, 65536, tid=threading.get_ident())
+            self._buffer = SocketBuffer(sock, 65536, tid=thread_id()())
             if do_conn_on_reconnect:
                 self._send_connect(reconnect=reconnect)
 

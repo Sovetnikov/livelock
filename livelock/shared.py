@@ -1,5 +1,7 @@
 import logging
 import os
+import threading
+
 logger = logging.getLogger(__name__)
 
 SYM_CRLF = b'\r\n'
@@ -158,3 +160,6 @@ class LazyArg(object):
 
     def __str__(self):
         return str(self.action())
+
+def thread_id():
+    return str(os.getpid()) + str(threading.get_ident())
