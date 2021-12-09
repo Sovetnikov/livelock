@@ -7,7 +7,7 @@ import time
 
 from livelock.connection import SocketBuffer
 from livelock.shared import get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, KEY_NOT_EXISTS, \
-    DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT
+    DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT, SYM_CRLF
 
 LIVELOCK_STUB = get_settings(None, 'LIVELOCK_STUB', False)
 default_acquire_timeout = get_settings(None, 'LIVELOCK_DEFAULT_ACQUIRE_TIMEOUT', DEFAULT_LIVELOCK_ACQUIRE_TIMEOUT)
@@ -119,7 +119,7 @@ class LiveLockConnection(object):
             logger.debug('New socket %s', sock)
             self._sock = sock
             self._sock_pid = os.getpid()
-            self._buffer = SocketBuffer(sock, 65536)
+            self._buffer = SocketBuffer(sock, 65536, tid=threading.ident())
             if do_conn_on_reconnect:
                 self._send_connect(reconnect=reconnect)
 
@@ -174,6 +174,8 @@ class LiveLockConnection(object):
         line = self._buffer.read(max(2, len + 2))
         if line[-1] != ord(b'\n'):
             raise Exception(r"line[-1] != ord(b'\n')")
+        if line[-2] != ord(b'\r'):
+            raise Exception(r"line[-2] != ord(b'\r')")
         if len < 0:
             return None
         if len == 0:
@@ -247,7 +249,7 @@ class LiveLockConnection(object):
             raise LiveLockClientException('Unknown char in RESP response start %s' % c)
 
     def send_raw_command(self, command, reconnect=True):
-        payload = command.encode() + b'\r\n'
+        payload = command.encode() + SYM_CRLF
         return self._send_command(payload, reconnect=reconnect)
 
     def send_command(self, command, *args, reconnect=True, do_conn_on_reconnect=True):

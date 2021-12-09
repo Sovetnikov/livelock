@@ -12,7 +12,7 @@ from livelock.memory_storage import InMemoryLockStorage
 from livelock.shared import DEFAULT_RELEASE_ALL_TIMEOUT, DEFAULT_BIND_TO, DEFAULT_LIVELOCK_SERVER_PORT, get_settings, DEFAULT_MAX_PAYLOAD, pack_resp, DEFAULT_SHUTDOWN_SUPPORT, \
     DEFAULT_PROMETHEUS_PORT, DEFAULT_TCP_KEEPALIVE_TIME, DEFAULT_TCP_KEEPALIVE_INTERVAL, DEFAULT_TCP_KEEPALIVE_PROBES, DEFAULT_LOGLEVEL, DEFAULT_DISABLE_DUMP_LOAD, \
     DEFAULT_TCP_USER_TIMEOUT_SECONDS, DEFAULT_MAINTENANCE_TIMEOUT_MS, DEFAULT_MAINTENANCE_PERIOD, get_float_settings, get_int_settings, SERVER_TERMINATING, CONN_HAS_ID_ERROR, \
-    WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS, LazyArg
+    WRONG_ARGS, CONN_REQUIRED_ERROR, UNKNOWN_COMMAND_ERROR, PASS_ERROR, ERRORS, LazyArg, SYM_CRLF
 from livelock.stats import latency, max_lock_live_time, stats_collection_time, prometheus_client_installed, maintenance_time, stats_collection_count, maintenance_count, lock_count
 from livelock.storage import LockStorage
 from livelock.tcp_opts import set_tcp_keepalive
@@ -238,13 +238,13 @@ class CommandProtocol(asyncio.Protocol):
     async def _read_int(self):
         if self.kill_active:
             return
-        line = await self._reader.readuntil(b'\r\n')
+        line = await self._reader.readuntil(SYM_CRLF)
         return int(line.decode().strip())
 
     async def _read_float(self):
         if self.kill_active:
             return
-        line = await self._reader.readuntil(b'\r\n')
+        line = await self._reader.readuntil(SYM_CRLF)
         return float(line.decode().strip())
 
     async def _read_bytes(self):
@@ -298,7 +298,7 @@ class CommandProtocol(asyncio.Protocol):
                     if not isinstance(value, list):
                         value = [value, ]
                 else:
-                    command = c + await self._reader.readuntil(b'\r\n')
+                    command = c + await self._reader.readuntil(SYM_CRLF)
                     value = [x.strip().encode() for x in command.decode().split(' ')]
             except (ConnectionAbortedError, ConnectionResetError, IncompleteReadError, TimeoutError) as e:
                 # Connection is closed

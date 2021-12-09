@@ -2,6 +2,8 @@ import logging
 import os
 logger = logging.getLogger(__name__)
 
+SYM_CRLF = b'\r\n'
+
 CONN_REQUIRED_ERROR = 1
 WRONG_ARGS = 2
 CONN_HAS_ID_ERROR = 3
@@ -77,17 +79,17 @@ def get_float_settings(value, key, default):
     return default
 
 def _pack_bytes(value):
-    return b''.join((b'^', str(len(value)).encode(), b'\r\n', value, b'\r\n'))
+    return b''.join((b'^', str(len(value)).encode(), SYM_CRLF, value, SYM_CRLF))
 
 
 def _pack_blob_str(value):
     value = value.encode()
-    return b''.join((b'$', str(len(value)).encode(), b'\r\n', value, b'\r\n'))
+    return b''.join((b'$', str(len(value)).encode(), SYM_CRLF, value, SYM_CRLF))
 
 
 def _pack_str(value):
     value = value.encode()
-    return b''.join((b'+', value, b'\r\n', value, b'\r\n'))
+    return b''.join((b'+', len(value), SYM_CRLF, value, SYM_CRLF))
 
 
 def _pack_null():
@@ -95,17 +97,17 @@ def _pack_null():
 
 
 def _pack_int(value):
-    return b''.join((b':', str(value).encode(), b'\r\n'))
+    return b''.join((b':', str(value).encode(), SYM_CRLF))
 
 
 def _pack_float(value):
-    return b''.join((b',', str(value).encode(), b'\r\n'))
+    return b''.join((b',', str(value).encode(), SYM_CRLF))
 
 
 def _pack_array(value):
     r = [pack_resp(x) for x in value]
     l = len(r)
-    r.insert(0, b''.join((b'*', str(l).encode(), b'\r\n')))
+    r.insert(0, b''.join((b'*', str(l).encode(), SYM_CRLF)))
     return b''.join(r)
 
 
@@ -117,7 +119,7 @@ def _pack_dict(value):
         r.append(pack_resp(k))
         r.append(pack_resp(v))
     l = len(value)
-    r.insert(0, b''.join((b'%', str(l).encode(), b'\r\n')))
+    r.insert(0, b''.join((b'%', str(l).encode(), SYM_CRLF)))
     return b''.join(r)
 
 
