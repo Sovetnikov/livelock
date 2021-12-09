@@ -86,6 +86,7 @@ class LiveLockConnection(object):
         self._client_id_pid = os.getpid()
 
     def _close(self):
+        logger.debug('Closing socket %s', self._sock)
         if self._sock and self._sock_pid == os.getpid():
             self._sock.close()
         self._sock = None
@@ -250,10 +251,12 @@ class LiveLockConnection(object):
 
     def send_raw_command(self, command, reconnect=True):
         payload = command.encode() + SYM_CRLF
+        logger.debug('Send command %s', command)
         return self._send_command(payload, reconnect=reconnect)
 
     def send_command(self, command, *args, reconnect=True, do_conn_on_reconnect=True):
         payload = pack_resp(([command, ] + list(args)) if args else [command, ])
+        logger.debug('Send command %s (args %s)', command, args)
         return self._send_command(payload, reconnect=reconnect, do_conn_on_reconnect=do_conn_on_reconnect)
 
     def _send_command(self, payload, reconnect=True, do_conn_on_reconnect=True):
