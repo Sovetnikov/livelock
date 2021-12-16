@@ -321,9 +321,10 @@ class LiveLock(object):
         connection = _get_connection()
         data = connection.send_command('FIND', pattern)
         result = []
+        LOCAL_TIMEZONE = datetime.datetime.now(datetime.timezone(datetime.timedelta(0))).astimezone().tzinfo
         if data:
             for lock_id, starttime in data:
-                result.append(dict(lock_id=lock_id, start_time=datetime.datetime.fromtimestamp(starttime)))
+                result.append(dict(lock_id=lock_id, start_time=datetime.datetime.fromtimestamp(starttime, tz=LOCAL_TIMEZONE)))
         return result
 
     @classmethod
