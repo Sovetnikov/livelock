@@ -433,6 +433,9 @@ class LiveLock(object):
                 return True
             raise e
 
+    def __repr__(self):
+        return f'{type(self)} bl={self.blocking} ({self.id})'
+
 
 class LiveLockStub(LiveLock):
     def __init__(self, id, blocking=True, timeout=None, live_lock_connection=None):
