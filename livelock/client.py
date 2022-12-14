@@ -318,6 +318,13 @@ class LiveLock(object):
 
     @classmethod
     def find(cls, pattern):
+        """
+        Returns locks that matches pattern with fnmatch
+        :param pattern: fnmatch pattern
+        :type pattern: str
+        :return: List of tuples (<lock_id>, <lock start unix time>)
+        :rtype: list
+        """
         connection = _get_connection()
         data = connection.send_command('FIND', pattern)
         result = []
